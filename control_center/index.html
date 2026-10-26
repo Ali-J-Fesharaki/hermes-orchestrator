@@ -47,9 +47,9 @@
 
     <!-- Live Telemetry Badges -->
     <div class="flex items-center gap-3">
-      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
-        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        Router :8045 Online
+      <div id="badge-router" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium" title="Live LLM Gateway Status">
+        <span id="router-pulse-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="router-status-text">LLM Router Checking...</span>
       </div>
       <div id="badge-agents" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-medium">
         <i class="fa-solid fa-robot"></i> <span id="agent-count">0 Agents Active</span>
@@ -909,6 +909,25 @@
 
       const tot = globalData.telemetry?.totals?.total_tokens || 0;
       document.getElementById('total-tokens').innerText = `${tot.toLocaleString()} Tokens Burned`;
+
+      // Update Live LLM Router status badge
+      const routerBadge = document.getElementById('badge-router');
+      const routerDot = document.getElementById('router-pulse-dot');
+      const routerText = document.getElementById('router-status-text');
+      if (routerBadge && routerDot && routerText) {
+        const isOnline = globalData.router_status === 'online';
+        const port = globalData.router_port || 8045;
+        const count = globalData.router_models_count || 0;
+        if (isOnline) {
+          routerBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium";
+          routerDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          routerText.innerText = `Router :${port} Online (${count} Models)`;
+        } else {
+          routerBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium";
+          routerDot.className = "w-2 h-2 rounded-full bg-rose-500";
+          routerText.innerText = `Router :${port} Offline`;
+        }
+      }
 
       renderQuotaOptimizerHeader();
     }

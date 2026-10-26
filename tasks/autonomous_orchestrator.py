@@ -244,7 +244,7 @@ def run_hermes_agent(
     repo_name: str = "General",
     role: str = "Hermes Worker",
     workdir: Path | None = None,
-    timeout_s: int = 720,
+    timeout_s: int = 1500,
     retries: int = 2
 ) -> tuple[str, dict]:
     """
@@ -307,15 +307,15 @@ def run_hermes_agent(
                 "session_id": session_id
             }
 
-            combined_err = f"{content} {err_text}"
-            if "429" in combined_err or "resource_exhausted" in combined_err.lower():
-                _GOVERNOR.record_429_incident(model, combined_err)
-                wait_time = max(5, int(_GOVERNOR.active_429_cooldown_until - time.time()))
-                print(f"[⏳ 429 RATE LIMIT (Hermes Agent)] Backing off {wait_time}s before attempt {attempt+1}...")
-                time.sleep(wait_time)
-                continue
-
             if res.returncode != 0:
+                combined_err = f"{err_text} {content}"
+                if "429" in combined_err or "resource_exhausted" in combined_err.lower() or "rate_limit" in combined_err.lower():
+                    _GOVERNOR.record_429_incident(model, combined_err)
+                    wait_time = max(5, int(_GOVERNOR.active_429_cooldown_until - time.time()))
+                    print(f"[⏳ 429 RATE LIMIT (Hermes Agent)] Backing off {wait_time}s before attempt {attempt+1}...")
+                    time.sleep(wait_time)
+                    continue
+
                 print(f"[-] Hermes Agent exit {res.returncode} on {model} [attempt {attempt}/{retries}]: {err_text[:200]}")
                 last_err = RuntimeError(f"Hermes Agent error (code {res.returncode}): {err_text[:200]}")
                 time.sleep(3 * attempt)

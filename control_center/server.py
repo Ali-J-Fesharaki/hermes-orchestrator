@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+import urllib.request
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DASH_DIR = BASE_DIR / "dashboards"
@@ -1101,6 +1102,41 @@ def get_accounts_status():
             pass
     return accounts
 
+def check_router_health() -> dict:
+    """Probes local router on port 8045/7836 with bearer token to verify real LLM gateway health."""
+    env_file = Path("/home/ajf/.hermes/.env")
+    keys = []
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if "=" in line and any(k in line for k in ["KEY", "TOKEN"]):
+                val = line.split("=", 1)[1].strip().strip("\"'")
+                if val and val not in keys:
+                    keys.append(val)
+
+    for port in [8045, 7836]:
+        for key in keys + [""]:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models")
+            if key:
+                req.add_header("Authorization", f"Bearer {key}")
+            try:
+                with urllib.request.urlopen(req, timeout=1.5) as r:
+                    data = json.loads(r.read().decode())
+                    models = data.get("data", [])
+                    return {
+                        "status": "online",
+                        "port": port,
+                        "models_count": len(models),
+                        "checked_at": datetime.now().strftime("%H:%M:%S")
+                    }
+            except Exception:
+                pass
+    return {
+        "status": "offline",
+        "port": 8045,
+        "models_count": 0,
+        "checked_at": datetime.now().strftime("%H:%M:%S")
+    }
+
 def get_system_snapshot():
     # Auto clean ghost / abandoned agents
     try:
@@ -1179,7 +1215,10 @@ def get_system_snapshot():
     # 9. Background Orchestrator Process Status
     orch_pid = is_orchestrator_running()
 
-    # 10. Failed Tasks Registry & Bugfix Queue
+    # 10. Live Router Probe
+    router_info = check_router_health()
+
+    # 11. Failed Tasks Registry & Bugfix Queue
     failed_tasks = {"total_recorded_failures": 0, "pending_bugfix_tasks": 0, "failures": []}
     failed_tasks_file = DASH_DIR / "failed_tasks_registry.json"
     if failed_tasks_file.exists():
@@ -1196,8 +1235,10 @@ def get_system_snapshot():
         "linkedin_queue": linkedin_text,
         "phoenix_traces": phoenix_traces,
         "phoenix_url": "http://127.0.0.1:6006",
-        "router_port": 8045,
-        "router_status": "online",
+        "router_port": router_info.get("port", 8045),
+        "router_status": router_info.get("status", "offline"),
+        "router_models_count": router_info.get("models_count", 0),
+        "router_checked_at": router_info.get("checked_at", ""),
         "quota_optimizer": quota_optimizer,
         "rate_governor": rate_governor,
         "failed_tasks": failed_tasks,
