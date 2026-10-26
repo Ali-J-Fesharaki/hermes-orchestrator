@@ -255,6 +255,7 @@ LAUNCHER_EOF
 
 # ------------------------------------------------------------------------------
 # STEP 2: Antigravity Tools Installation (LLM Proxy & Account Manager :8045)
+# Specifically downloads and extracts the universal .AppImage release (NOT .deb)
 # ------------------------------------------------------------------------------
 install_antigravity_tools() {
     log_info "Step 2: Checking Antigravity Tools installation & configuration..."
@@ -262,43 +263,96 @@ install_antigravity_tools() {
     local AG_CONFIG_DIR="${USER_HOME}/.antigravity_tools"
     mkdir -p "$AG_TOOLS_DIR" "$AG_CONFIG_DIR" "${USER_HOME}/.local/bin"
 
-    local APPIMAGE_PATH="${AG_TOOLS_DIR}/Antigravity.Tools_amd64.AppImage"
-    
-    if [[ -x "${USER_HOME}/.local/bin/antigravity-tools" || -d "${AG_TOOLS_DIR}/app" ]]; then
-        log_skip "Antigravity Tools binary/app is already present. Skipping extraction."
-    elif [[ -f "$APPIMAGE_PATH" ]]; then
-        log_info "Extracting Antigravity Tools AppImage..."
-        cd "$AG_TOOLS_DIR"
-        chmod +x "$APPIMAGE_PATH"
-        ./"$(basename "$APPIMAGE_PATH")" --appimage-extract > /dev/null 2>&1 || true
-        if [[ -d "${AG_TOOLS_DIR}/squashfs-root" ]]; then
-            mv "${AG_TOOLS_DIR}/squashfs-root" "${AG_TOOLS_DIR}/app"
-            log_ok "Extracted to ${AG_TOOLS_DIR}/app"
+    # 1. Check for existing .AppImage in directory
+    local APPIMAGE_FILE=""
+    for candidate in "${AG_TOOLS_DIR}"/Antigravity*.AppImage "${AG_TOOLS_DIR}"/*.AppImage; do
+        if [[ -f "$candidate" && -s "$candidate" ]]; then
+            APPIMAGE_FILE="$candidate"
+            break
         fi
+    done
+
+    # 2. If no .AppImage is found, download the official .AppImage release
+    if [[ -z "$APPIMAGE_FILE" ]]; then
+        APPIMAGE_FILE="${AG_TOOLS_DIR}/Antigravity.Tools_amd64.AppImage"
+        log_info "Querying latest Antigravity Tools .AppImage release from GitHub..."
+
+        local DL_URL=""
+        # Query official lbjlaq/Antigravity-Manager repo for amd64 .AppImage asset
+        DL_URL=$(curl -s --max-time 10 https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest 2>/dev/null | jq -r '.assets[] | select(.name | test("amd64.*\.AppImage$")) | .browser_download_url' | head -n 1 || echo "")
+        
+        # Try through local proxy if direct fetch is blocked
+        if [[ -z "$DL_URL" || "$DL_URL" == "null" ]]; then
+            DL_URL=$(curl -s --max-time 10 --proxy http://127.0.0.1:10809 https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest 2>/dev/null | jq -r '.assets[] | select(.name | test("amd64.*\.AppImage$")) | .browser_download_url' | head -n 1 || echo "")
+        fi
+
+        # Known stable fallback if API rate-limited
+        if [[ -z "$DL_URL" || "$DL_URL" == "null" ]]; then
+            DL_URL="https://github.com/lbjlaq/Antigravity-Manager/releases/download/v5.0.0/Antigravity.Tools_5.0.0_amd64.AppImage"
+        fi
+
+        log_info "Downloading Antigravity Tools (.AppImage format): ${DL_URL}..."
+        if ! wget -q --show-progress "$DL_URL" -O "$APPIMAGE_FILE"; then
+            log_warn "wget direct download failed. Trying through local proxy..."
+            if command -v curl &>/dev/null; then
+                curl -L -o "$APPIMAGE_FILE" --proxy http://127.0.0.1:10809 "$DL_URL" 2>/dev/null || curl -L -o "$APPIMAGE_FILE" "$DL_URL"
+            fi
+        fi
+
+        if [[ -f "$APPIMAGE_FILE" && -s "$APPIMAGE_FILE" ]]; then
+            chmod +x "$APPIMAGE_FILE"
+            log_ok "Downloaded Antigravity Tools AppImage to ${APPIMAGE_FILE}"
+        else
+            log_err "Failed to download Antigravity Tools .AppImage. Please verify internet/proxy connection."
+        fi
+    else
+        log_skip "Antigravity Tools .AppImage already present: $(basename "$APPIMAGE_FILE")"
     fi
 
-    if [[ ! -f "${USER_HOME}/.local/bin/antigravity-tools" ]]; then
-        cat << 'LAUNCHER_AG' > "${USER_HOME}/.local/bin/antigravity-tools"
+    # 3. Extract AppImage for headless background daemon if app directory is missing
+    if [[ ! -d "${AG_TOOLS_DIR}/app" ]]; then
+        if [[ -n "$APPIMAGE_FILE" && -f "$APPIMAGE_FILE" ]]; then
+            log_info "Extracting AppImage for headless service runtime..."
+            cd "$AG_TOOLS_DIR"
+            chmod +x "$APPIMAGE_FILE"
+            ./"$(basename "$APPIMAGE_FILE")" --appimage-extract > /dev/null 2>&1 || true
+            if [[ -d "${AG_TOOLS_DIR}/squashfs-root" ]]; then
+                mv "${AG_TOOLS_DIR}/squashfs-root" "${AG_TOOLS_DIR}/app"
+                log_ok "Extracted headless runtime to ${AG_TOOLS_DIR}/app"
+            fi
+        fi
+    else
+        log_skip "Headless app runtime already extracted at ${AG_TOOLS_DIR}/app."
+    fi
+
+    # 4. Create smart launcher at ~/.local/bin/antigravity-tools
+    cat << 'LAUNCHER_AG' > "${USER_HOME}/.local/bin/antigravity-tools"
 #!/usr/bin/env bash
 USER_HOME=$(eval echo "~${SUDO_USER:-$USER}")
 AG_TOOLS_DIR="${USER_HOME}/antigravity_tools"
-APPIMAGE_PATH="${AG_TOOLS_DIR}/Antigravity.Tools_amd64.AppImage"
-if [[ -f "${AG_TOOLS_DIR}/app/usr/bin/antigravity-tools" ]]; then
+APPIMAGE_PATH="$(find "${AG_TOOLS_DIR}" -maxdepth 1 -name "Antigravity*.AppImage" 2>/dev/null | head -n 1 || echo "${AG_TOOLS_DIR}/Antigravity.Tools_amd64.AppImage")"
+
+# Headless background execution
+if [[ "${1:-}" == "--headless" ]]; then
+    if [[ -x "${AG_TOOLS_DIR}/app/usr/bin/antigravity-tools" ]]; then
+        exec "${AG_TOOLS_DIR}/app/usr/bin/antigravity-tools" "$@"
+    elif [[ -x "$APPIMAGE_PATH" ]]; then
+        exec "$APPIMAGE_PATH" "$@"
+    fi
+fi
+
+# GUI execution
+if [[ -x "$APPIMAGE_PATH" ]]; then
+    exec "$APPIMAGE_PATH" "$@"
+elif [[ -x "${AG_TOOLS_DIR}/app/usr/bin/antigravity-tools" ]]; then
     exec "${AG_TOOLS_DIR}/app/usr/bin/antigravity-tools" "$@"
-elif [[ -f "${APPIMAGE_PATH}" ]]; then
-    exec "${APPIMAGE_PATH}" "$@"
-elif command -v antigravity-tools &>/dev/null && [[ "$(command -v antigravity-tools)" != "${USER_HOME}/.local/bin/antigravity-tools" ]]; then
-    exec "$(command -v antigravity-tools)" "$@"
 else
-    echo "Antigravity Tools binary not found in ${AG_TOOLS_DIR}" >&2
+    echo "[-] Antigravity Tools binary or AppImage not found in ${AG_TOOLS_DIR}" >&2
     exit 1
 fi
 LAUNCHER_AG
-        chmod +x "${USER_HOME}/.local/bin/antigravity-tools"
-        log_ok "Created launcher: ~/.local/bin/antigravity-tools"
-    else
-        log_skip "Launcher ~/.local/bin/antigravity-tools already exists."
-    fi
+    chmod +x "${USER_HOME}/.local/bin/antigravity-tools"
+    log_ok "Configured ~/.local/bin/antigravity-tools launcher (AppImage GUI + Headless daemon)"
 
     # Smart configuration & port verification
     local AG_CONFIG="${AG_CONFIG_DIR}/gui_config.json"
