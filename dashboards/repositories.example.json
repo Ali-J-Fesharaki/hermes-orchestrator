@@ -1,0 +1,33 @@
+{
+  "updated_at": "2026-10-15 12:00:00",
+  "orchestrator_version": "v4.0.0",
+  "system_status": "READY",
+  "active_repositories_count": 1,
+  "repositories": [
+    {
+      "id": "sample_project",
+      "name": "Sample Autonomous Project",
+      "path": "./sample_project",
+      "category": "software-engineering",
+      "priority": 1,
+      "auto_planning": true,
+      "milestone_cap": 3,
+      "goal_file": "README.md",
+      "milestones": [
+        {
+          "name": "Scaffold: Project Architecture and Base Service",
+          "status": "todo",
+          "details": "Initialize core modular architecture, dependency injection, and configuration loaders.",
+          "relative_filepath": "src/main.py",
+          "technical_specification": "Ensure clean separation of concerns and robust error handling.",
+          "executor_prompt": "Implement the complete entry point for the sample project.",
+          "approved_for_auto_run": false,
+          "is_ai_development": true,
+          "is_recovery": false,
+          "planned_by": "Claude Opus 4.6",
+          "planner_color": "purple"
+        }
+      ]
+    }
+  ]
+}

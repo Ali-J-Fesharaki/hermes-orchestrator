@@ -1,0 +1,20 @@
+{
+  "active_blockers": [
+    {
+      "id": "BLOCKER-001",
+      "category": "private_papers_paywall",
+      "target_repository": "Research_Project",
+      "severity": "medium",
+      "title": "Private / Paywalled Research Papers Needed",
+      "description": "Certain core IEEE/Springer/ACM papers cited cannot be scraped automatically via arXiv and need manual PDF placement.",
+      "needed_items": [
+        {
+          "title": "Sample Paper Title on Domain Research (Author et al., 2024)",
+          "target_folder": "/path/to/project/papers/",
+          "status": "pending_user_action"
+        }
+      ],
+      "how_user_can_help": "Download the PDFs from your university library or academic portal and drop them into the specified target folders."
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+# Local Secrets and Tokens
+.github_token
+.env
+*.key
+*.pem
+
+# Python Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Personal Skills, Memories & Collective Intelligence Bundles
+skills/
+memories/
+experience/
+*.tar.gz
+*.zip
+*.bundle
+hermes_experience*
+.skills_prompt_snapshot.json
+
+# Local Runtime User Data & Dashboards (Keeps user repos and experience private)
+dashboards/*.json
+!dashboards/*.example.json
+dashboards/notes_view/
+dashboards/HUMAN_ACTION_BOARD.md
+dashboards/ROADMAP_BOARD.md
+dashboards/SCALING_ADVISOR.md
+dashboards/TOKEN_FIT_BOARD.md
+dashboards/FAILED_TASKS_REPORT.md
+dashboards/linkedin_devlog_queue.md
+dashboards/*.png
+
+# Editor & System Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.log

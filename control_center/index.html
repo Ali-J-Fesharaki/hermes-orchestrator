@@ -1,0 +1,2747 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hermes Orchestrator & Multi-Repo Kanban</title>
+  <!-- Tailwind CSS & FontAwesome -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#eef2ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 900: '#1e1b4b' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0b0f19; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .glass { background: rgba(17, 24, 39, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .card-kanban { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card-kanban:hover { transform: translateY(-2px); box-shadow: 0 8px 20px -4px rgba(0, 0, 0, 0.5); }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Top Navigation & Health Bar -->
+  <header class="glass sticky top-0 z-50 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+        <i class="fa-solid fa-brain text-white text-lg"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          HERMES ORCHESTRATOR <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 font-mono border border-indigo-500/30">v4.0</span>
+        </h1>
+        <p class="text-xs text-slate-400">Autonomous Multi-Repo Orchestrator & Live Agent Monitor</p>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Badges -->
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        Router :8045 Online
+      </div>
+      <div id="badge-agents" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-medium">
+        <i class="fa-solid fa-robot"></i> <span id="agent-count">0 Agents Active</span>
+      </div>
+      <div id="badge-tokens" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono">
+        <i class="fa-solid fa-fire"></i> <span id="total-tokens">0 Tokens</span>
+      </div>
+      <!-- Token Quota Optimizer & Alarm Badge -->
+      <div id="badge-quota-alarm" onclick="openQuotaOptimizerModal()" class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-300 text-xs font-medium transition hover:border-teal-400/50" title="Click to view Token Quota & Fleet Readiness Details">
+        <i id="quota-alarm-icon" class="fa-solid fa-bolt text-teal-400"></i>
+        <span id="quota-alarm-text">Quota Ready</span>
+      </div>
+      <!-- Auto-Pilot Toggle Button -->
+      <button onclick="toggleAutonomousLoop()" id="btn-toggle-auto" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition flex items-center gap-2" title="Toggle 24/7 Autonomous Orchestrator Loop">
+        <span id="auto-pulse-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span id="auto-loop-label">Auto: OFF</span>
+      </button>
+      <button onclick="triggerOrchestrator()" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-play"></i> Run Pass
+      </button>
+      <button onclick="syncGitHubProjects()" id="btn-sync-gh" class="px-3.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold shadow-md shadow-teal-600/30 transition flex items-center gap-1.5" title="Two-way sync with GitHub Projects v2">
+        <i class="fa-solid fa-rotate"></i> <span id="gh-sync-label">Sync GitHub</span>
+      </button>
+      <a href="https://github.com/users/Ali-J-Fesharaki/projects" target="_blank" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition flex items-center gap-1.5">
+        <i class="fa-brands fa-github"></i> GitHub Projects
+      </a>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <div class="px-6 border-b border-slate-800/80 bg-slate-900/40 flex items-center gap-8">
+    <button onclick="switchTab('kanban')" id="tab-btn-kanban" class="py-3 text-sm font-semibold border-b-2 border-indigo-500 text-indigo-400 flex items-center gap-2 transition">
+      <i class="fa-solid fa-table-columns"></i> Multi-Repo Kanban
+    </button>
+    <button onclick="switchTab('repos')" id="tab-btn-repos" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-folder-tree"></i> Repositories & Auto-Mode
+    </button>
+    <button onclick="switchTab('telemetry')" id="tab-btn-telemetry" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-chart-line"></i> Agents & Token Telemetry
+    </button>
+    <button onclick="switchTab('accounts')" id="tab-btn-accounts" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-users"></i> 4 Google Pro Fleet
+    </button>
+    <button onclick="switchTab('bugfix')" id="tab-btn-bugfix" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-bug text-rose-400"></i> Failed Tasks & Bugfix Queue
+      <span id="failed-tasks-tab-badge" class="px-1.5 py-0.5 rounded-full text-[10px] bg-rose-950 text-rose-400 border border-rose-800 font-mono">0</span>
+    </button>
+    <button onclick="switchTab('linkedin')" id="tab-btn-linkedin" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-brands fa-linkedin text-blue-400"></i> LinkedIn Queue
+    </button>
+  </div>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 p-6 overflow-y-auto">
+
+    <!-- ================================================================= -->
+    <!-- TAB 1: MULTI-REPO KANBAN BOARD                                    -->
+    <!-- ================================================================= -->
+    <div id="tab-kanban" class="space-y-6">
+      <!-- Repo Filter & Controls -->
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Filter Repository:</label>
+          <select id="repo-filter" onchange="renderKanban()" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none">
+            <option value="all">📁 All Repositories</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button onclick="openAddRepoModal()" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5" title="Connect / Clone a new GitHub Repository">
+            <i class="fa-solid fa-folder-plus"></i> Connect GitHub Repo
+          </button>
+          <button onclick="openSteeringHistoryModal()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 text-xs font-semibold transition flex items-center gap-1.5" title="View persistent human guidance & negative constraints">
+            <i class="fa-solid fa-brain text-amber-400"></i> Steering Memory
+          </button>
+          <button onclick="openSteerModal()" class="px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-md shadow-purple-600/30 transition flex items-center gap-1.5" title="Steer the autonomous strategic planner with high-level direction">
+            <i class="fa-solid fa-bullseye"></i> Steer Planner
+          </button>
+          <button onclick="openAddGoalModal()" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/30 transition flex items-center gap-1.5">
+            <i class="fa-solid fa-plus"></i> Add Goal Manually
+          </button>
+        </div>
+      </div>
+
+      <!-- Kanban Grid (Exact 5-Column Match with GitHub Projects v2) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <!-- Col 1: Backlog -->
+        <div class="flex flex-col rounded-xl bg-slate-900/60 border border-slate-800 p-3.5 min-h-[550px]">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+            <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-slate-400"></span> Backlog
+            </h3>
+            <span id="count-backlog" class="text-xs font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">0</span>
+          </div>
+          <div id="col-backlog" class="space-y-3 flex-1 overflow-y-auto"></div>
+        </div>
+
+        <!-- Col 2: Ready -->
+        <div class="flex flex-col rounded-xl bg-slate-900/60 border border-slate-800 p-3.5 min-h-[550px]">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+            <h3 class="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-amber-400"></span> Ready
+            </h3>
+            <span id="count-ready" class="text-xs font-mono px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">0</span>
+          </div>
+          <div id="col-ready" class="space-y-3 flex-1 overflow-y-auto"></div>
+        </div>
+
+        <!-- Col 3: In Progress (Agents Working) -->
+        <div class="flex flex-col rounded-xl bg-indigo-950/20 border border-indigo-500/30 p-3.5 min-h-[550px]">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-indigo-500/20">
+            <h3 class="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-indigo-400 animate-ping"></span> In Progress
+            </h3>
+            <span id="count-inprogress" class="text-xs font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">0</span>
+          </div>
+          <div id="col-inprogress" class="space-y-3 flex-1 overflow-y-auto"></div>
+        </div>
+
+        <!-- Col 4: In Review -->
+        <div class="flex flex-col rounded-xl bg-purple-950/20 border border-purple-500/30 p-3.5 min-h-[550px]">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-purple-500/20">
+            <h3 class="text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-purple-400"></span> In Review
+            </h3>
+            <span id="count-inreview" class="text-xs font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">0</span>
+          </div>
+          <div id="col-inreview" class="space-y-3 flex-1 overflow-y-auto"></div>
+        </div>
+
+        <!-- Col 5: Done & Verified -->
+        <div class="flex flex-col rounded-xl bg-slate-900/60 border border-slate-800 p-3.5 min-h-[550px]">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+            <h3 class="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Done
+            </h3>
+            <span id="count-done" class="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">0</span>
+          </div>
+          <div id="col-done" class="space-y-3 flex-1 overflow-y-auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB: REPOSITORIES & AUTONOMOUS CONTROL                            -->
+    <!-- ================================================================= -->
+    <div id="tab-repos" class="hidden space-y-6">
+      <div class="flex flex-wrap items-center justify-between gap-4 p-5 rounded-xl bg-slate-900/60 border border-slate-800">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-folder-tree text-indigo-400"></i> Tracked GitHub Repositories & Autonomous Control
+          </h2>
+          <p class="text-xs text-slate-400 mt-1">Manage repository tracking, autonomous planning, and model assignments.</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <button onclick="toggleAllAutoApprove()" id="btn-toggle-all-approve" class="px-3.5 py-2 rounded-lg bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/30 text-xs font-semibold flex items-center gap-1.5 transition" title="Toggle Auto-Approval for all repositories">
+            <i class="fa-solid fa-bolt text-amber-400"></i> <span id="label-all-auto-approve">Auto-Approve All Plans</span>
+          </button>
+          <button onclick="syncGitHubProjects()" class="px-3.5 py-2 rounded-lg bg-teal-600/20 text-teal-300 hover:bg-teal-600/30 border border-teal-500/30 text-xs font-semibold flex items-center gap-1.5 transition">
+            <i class="fa-solid fa-rotate"></i> Sync GitHub
+          </button>
+          <button onclick="openAddRepoModal()" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition flex items-center gap-1.5">
+            <i class="fa-solid fa-plus"></i> Connect New Repository
+          </button>
+        </div>
+      </div>
+      <div id="repos-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 2: AGENT TELEMETRY & TOKEN BURN                               -->
+    <!-- ================================================================= -->
+    <div id="tab-telemetry" class="hidden space-y-6">
+      <!-- Adaptive Anti-429 Rate & Token Flow Governor -->
+      <div class="glass rounded-xl p-5 border border-slate-800 bg-slate-950/70">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-gauge-high text-emerald-400"></i>
+            <h3 class="text-sm font-bold text-slate-200">Adaptive Rate & Token Flow Governor (Anti-429 Engine)</h3>
+            <span id="governor-status-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">FLOW_OPTIMAL</span>
+          </div>
+          <span class="text-[11px] text-slate-400">Self-tuning AIMD Traffic Shaper</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs mb-3">
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Active Policy Tier</span>
+            <span id="gov-tier" class="text-emerald-400 font-mono font-bold text-sm">BALANCED</span>
+            <span id="gov-concurrency" class="text-[10px] text-slate-500 block">2 workers active</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Token Budget (Paced)</span>
+            <span id="gov-max-tokens" class="text-indigo-400 font-mono font-bold text-sm">8,192 max</span>
+            <span class="text-[10px] text-slate-500 block">Up to 8,192 scaled</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Stagger Dispatch Pacing</span>
+            <span id="gov-stagger" class="text-purple-400 font-mono font-bold text-sm">1.60s</span>
+            <span class="text-[10px] text-slate-500 block">Empirical trial & error</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Penalty vs Reward (RL)</span>
+            <span id="gov-rl-score" class="text-cyan-400 font-mono font-bold text-sm">0.0 / +0.0</span>
+            <span id="gov-streak" class="text-[10px] text-slate-500 block">0 clean streak</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Lowest Account Quota</span>
+            <span id="gov-min-quota" class="text-amber-400 font-mono font-bold text-sm">78.0%</span>
+            <span id="gov-cooldown" class="text-[10px] text-slate-500 block">Cooldown: 0s</span>
+          </div>
+        </div>
+        <div id="gov-details" class="text-[11px] font-mono text-slate-400 bg-slate-900/60 p-2.5 rounded border border-slate-800/80">
+          Traffic flow optimal. Staggered dispatch active across unblocked Google accounts.
+        </div>
+      </div>
+
+      <!-- Active Running Agents Table -->
+      <div class="glass rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+            <i class="fa-solid fa-network-wired text-indigo-400"></i> Active Executing Agents in Concurrency
+          </h3>
+          <button onclick="clearActiveAgents()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs flex items-center gap-1.5 transition">
+            <i class="fa-solid fa-broom text-amber-400"></i> Clear Ghost / Stale Agents
+          </button>
+        </div>
+        <div id="active-agents-table" class="overflow-x-auto text-xs">
+          <!-- Populated via JS -->
+        </div>
+      </div>
+
+      <!-- Live Agent Diagnostic Logs & Phoenix Traces -->
+      <div class="glass rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-satellite-dish text-cyan-400"></i>
+            <h3 class="text-sm font-bold text-slate-200">Live Agent Diagnostic Logs & Phoenix Traces</h3>
+            <span class="px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800 text-[10px] text-cyan-300 font-mono">Port 6006</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="fetchStatus()" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs flex items-center gap-1.5 transition">
+              <i class="fa-solid fa-arrows-rotate"></i> Refresh Logs
+            </button>
+            <a href="http://127.0.0.1:6006" target="_blank" class="px-3 py-1 rounded bg-indigo-600/80 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow transition">
+              <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Phoenix UI
+            </a>
+          </div>
+        </div>
+        <p class="text-xs text-slate-400 mb-3">Granular OpenTelemetry diagnostics of LLM reasoning, token burn, error root-causes, and code outputs:</p>
+        <div id="phoenix-traces-container" class="space-y-2.5 max-h-[460px] overflow-y-auto text-xs pr-1">
+          <!-- Populated via JS -->
+        </div>
+      </div>
+
+      <!-- Token Burn per Repo -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="glass rounded-xl p-5 border border-slate-800">
+          <h3 class="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-chart-pie text-amber-400"></i> Token Consumption By Repository
+          </h3>
+          <div id="repo-tokens-table" class="text-xs space-y-3"></div>
+        </div>
+
+        <div class="glass rounded-xl p-5 border border-slate-800">
+          <h3 class="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-microchip text-purple-400"></i> Consumption By Model & Role
+          </h3>
+          <div id="model-tokens-table" class="text-xs space-y-3"></div>
+        </div>
+      </div>
+
+      <!-- Live Agent Activity Stream -->
+      <div class="glass rounded-xl p-5 border border-slate-800">
+        <h3 class="text-sm font-bold text-slate-200 mb-3 flex items-center gap-2">
+          <i class="fa-solid fa-list-check text-emerald-400"></i> Recent Orchestrator & Worker Activity Stream
+        </h3>
+        <div id="telemetry-recent-events" class="space-y-1.5 font-mono text-[11px] text-slate-300 max-h-48 overflow-y-auto bg-slate-950/60 p-3 rounded-lg border border-slate-800/80"></div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 3: 4 GOOGLE PRO ACCOUNTS STATUS                               -->
+    <!-- ================================================================= -->
+    <div id="tab-accounts" class="hidden space-y-6">
+      <div class="glass rounded-xl p-5 border border-slate-800">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-emerald-400"></i> 4 Google Pro Accounts Rotation Fleet
+          </h3>
+          <span class="text-xs text-slate-400">Local Router: http://127.0.0.1:8045</span>
+        </div>
+        <div id="accounts-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <!-- Populated via JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 4: LINKEDIN QUEUE                                             -->
+    <!-- ================================================================= -->
+    <div id="tab-linkedin" class="hidden space-y-6">
+      <div class="glass rounded-xl p-6 border border-slate-800">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-bold text-blue-400 flex items-center gap-2">
+            <i class="fa-brands fa-linkedin text-lg"></i> Technical LinkedIn Drafts (Auto-Generated by Hermes)
+          </h3>
+          <button onclick="copyLinkedInPost()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow transition flex items-center gap-1.5">
+            <i class="fa-solid fa-copy"></i> Copy Post to Clipboard
+          </button>
+        </div>
+        <pre id="linkedin-content" class="bg-slate-950 p-5 rounded-lg border border-slate-800 text-xs text-slate-300 font-sans leading-relaxed whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 5: FAILED TASKS REGISTRY & BUGFIX QUEUE                      -->
+    <!-- ================================================================= -->
+    <div id="tab-bugfix" class="hidden space-y-6">
+      <div class="glass rounded-xl p-6 border border-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div>
+            <h3 class="text-base font-bold text-rose-400 flex items-center gap-2">
+              <i class="fa-solid fa-bug"></i> Failed Tasks Registry & Autonomous Bugfix Queue
+            </h3>
+            <p class="text-xs text-slate-400 mt-1">
+              Structured database of execution failures with unique IDs, domain tags, compiler errors, and traces ready for bug-fixing agents.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="px-3 py-1 rounded-full text-xs font-mono font-bold bg-rose-950 text-rose-400 border border-rose-800" id="bugfix-pending-count">0 Pending Fixes</span>
+            <span class="px-3 py-1 rounded-full text-xs font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800" id="bugfix-resolved-count">0 Resolved</span>
+            <button onclick="fetchStatus()" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 border border-slate-700 transition flex items-center gap-1.5">
+              <i class="fa-solid fa-rotate"></i> Refresh
+            </button>
+          </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="flex flex-wrap items-center gap-2 pt-2 pb-4 border-b border-slate-800" id="bugfix-tag-filters">
+          <span class="text-xs text-slate-500 font-semibold uppercase mr-2"><i class="fa-solid fa-filter"></i> Filter Tags:</span>
+          <!-- Dynamic tag chips -->
+        </div>
+
+        <!-- Cards Container -->
+        <div class="space-y-4 mt-4" id="bugfix-tasks-container">
+          <div class="p-8 text-center text-slate-500 font-mono text-xs">Loading failed tasks registry...</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Add Goal Modal -->
+  <div id="modal-add-goal" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-slate-700 w-full max-w-md p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-plus-circle text-emerald-400"></i> Add New Milestone Goal
+        </h3>
+        <button onclick="closeAddGoalModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Target Repository</label>
+          <select id="new-goal-repo" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Milestone Name / Title</label>
+          <input type="text" id="new-goal-title" placeholder="e.g. Milestone 5: Comparative Benchmarking..." class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Technical Details / Scope</label>
+          <textarea id="new-goal-details" rows="3" placeholder="Describe the formal mathematical, code, or experimental deliverable..." class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500"></textarea>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button onclick="closeAddGoalModal()" class="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">Cancel</button>
+        <button onclick="submitNewGoal()" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 shadow-lg shadow-emerald-600/30">Add Goal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Steer Strategic Planner Modal -->
+  <div id="modal-steer" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-purple-500/30 w-full max-w-lg p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-bullseye text-purple-400"></i> Steer Planner
+        </h3>
+        <button onclick="closeSteerModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+      </div>
+      <p class="text-xs text-slate-300">
+        Specify your high-level architectural direction or research intent for a repository. The strategic planner will formulate <strong>concrete technical milestones</strong> strictly aligned with your steering guidance and push them directly to GitHub Projects v2.
+      </p>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Target Repository</label>
+          <select id="steer-repo" onchange="updateSteerLimitFromRepo()" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-purple-500">
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Architect Steering Direction / Research Intent</label>
+          <textarea id="steer-intent" rows="3" placeholder="e.g. Focus specifically on acoustic air-gap boundary formulation and compare costmap layer vs DRL sensory tensor in LaTeX Chapter 3..." class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-purple-500"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Planning Buffer Cap</label>
+          <div class="flex items-center gap-2">
+            <input type="number" id="steer-limit" value="3" min="1" max="10" class="w-20 bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 outline-none focus:border-purple-500">
+            <span class="text-[11px] text-slate-400">Target active backlog task buffer</span>
+          </div>
+        </div>
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Live Dynamic Planning Cascade (Ranked via OpenRouter)</label>
+          <div id="steer-models-hierarchy" class="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-300 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
+            <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">#1 Claude Opus 4.6 Thinking</span>
+            <span class="text-slate-500">→</span>
+            <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">#2 Claude Sonnet 4.6 Thinking</span>
+            <span class="text-slate-500">→</span>
+            <span class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">#3 Gemini 3.1 Pro (High)</span>
+          </div>
+        </div>
+      </div>
+      <div id="steer-status" class="hidden text-xs py-2 px-3 rounded-lg bg-purple-500/20 text-purple-300 font-mono"></div>
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button onclick="closeSteerModal()" class="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">Cancel</button>
+        <button onclick="submitSteerPlanner()" id="btn-submit-steer" class="px-4 py-2 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-500 shadow-lg shadow-purple-600/30 flex items-center gap-2">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Synthesize & Push to GitHub
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Token Quota & Fleet Readiness Inspector -->
+  <div id="modal-quota-optimizer" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-teal-500/40 w-full max-w-2xl p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse"></span>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-calculator text-teal-400"></i> Token Quota & Readiness Optimizer
+          </h3>
+        </div>
+        <button onclick="closeQuotaOptimizerModal()" class="text-slate-400 hover:text-white transition">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Live Decision & Alarm Card -->
+      <div id="optimizer-status-box" class="p-4 rounded-xl border flex items-center justify-between gap-4">
+        <div class="space-y-1">
+          <p id="optimizer-headline" class="text-xs font-bold uppercase tracking-wider"></p>
+          <p id="optimizer-message" class="text-xs text-slate-300"></p>
+        </div>
+        <div class="text-right flex-shrink-0">
+          <p class="text-[10px] text-slate-400 font-mono">NEXT RESUME / PASS</p>
+          <p id="optimizer-countdown" class="text-lg font-mono font-bold"></p>
+        </div>
+      </div>
+
+      <!-- Account Quotas Breakdown -->
+      <div class="space-y-2">
+        <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <i class="fa-solid fa-users text-indigo-400"></i> Account Pool Quotas & Circuit Breakers
+        </h4>
+        <div id="optimizer-accounts-list" class="space-y-2 max-h-56 overflow-y-auto pr-1">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <div class="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Autonomous Orchestrator:</span>
+          <span id="optimizer-orch-status" class="font-bold"></span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="toggleAutonomousLoop()" id="modal-btn-toggle-auto" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition">
+            Toggle Auto Loop
+          </button>
+          <button onclick="closeQuotaOptimizerModal()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Interactive Card Architect Studio & AI Refinement -->
+  <div id="modal-card-editor" class="fixed inset-0 bg-black/75 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-indigo-500/40 w-full max-w-2xl p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span id="editor-repo-badge" class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+            [P1] PHD
+          </span>
+          <h3 class="text-base font-bold text-white flex items-center gap-1.5">
+            <i class="fa-solid fa-pen-to-square text-indigo-400"></i> Milestone Architect Studio
+          </h3>
+        </div>
+        <button onclick="closeCardEditor()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+      </div>
+
+      <!-- AI Assistant Refiner Box (Purple Glow) -->
+      <div class="p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/40 space-y-2">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-wand-magic-sparkles text-purple-400"></i> AI Architect Assistant (Voice / Rough Idea Reformulator)
+          </label>
+          <span class="text-[10px] text-purple-400 font-mono">NLP Refinement</span>
+        </div>
+        <p class="text-[11px] text-slate-300 leading-relaxed">
+          Provide high-level guidance or adjustments. AI converts your intent into formal technical specifications:
+        </p>
+        <textarea id="editor-ai-input" rows="2" placeholder="e.g. Add continuous reward terms for acoustic air-gap preservation to prevent freezing..." class="w-full bg-slate-900 border border-purple-500/30 rounded-lg p-2.5 text-xs text-purple-100 placeholder-purple-400/50 outline-none focus:border-purple-400"></textarea>
+        <div class="flex items-center justify-between pt-1">
+          <div id="editor-ai-feedback" class="text-[11px] text-emerald-400 font-mono hidden"></div>
+          <button onclick="runCardAIRefine()" id="btn-card-refine" class="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-purple-600/30 flex items-center gap-1.5 transition ml-auto">
+            <i class="fa-solid fa-sparkles"></i> AI Polish & Formulate Technical Specs
+          </button>
+        </div>
+      </div>
+
+      <!-- Milestone Editable Fields -->
+      <div class="space-y-3 pt-1">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Milestone Name / Goal Title</label>
+          <input type="text" id="editor-title" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 font-semibold outline-none focus:border-indigo-500">
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Target Output File / Relative Path</label>
+            <input type="text" id="editor-filepath" placeholder="e.g. proposal/chapters/chapter3_virtual_air_tube_drl.tex" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 font-mono outline-none focus:border-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Status / Workflow Column</label>
+            <select id="editor-status" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+              <option value="backlog">Backlog</option>
+              <option value="pending">Ready</option>
+              <option value="in_progress">In Progress</option>
+              <option value="in_review">In Review</option>
+              <option value="completed">Done</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Technical Deliverable Specifications & Formulation</label>
+          <textarea id="editor-details" rows="4" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 leading-relaxed outline-none focus:border-indigo-500"></textarea>
+        </div>
+      </div>
+
+      <!-- Git Provenance & Research Artifacts Section -->
+      <div id="editor-provenance-box" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 hidden">
+        <div class="flex items-center justify-between text-xs font-semibold text-slate-300">
+          <span class="flex items-center gap-1.5"><i class="fa-solid fa-code-commit text-emerald-400"></i> Git Provenance & Version Control</span>
+          <span id="editor-completed-at" class="text-[10px] font-mono text-slate-400"></span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
+          <div class="p-2 rounded bg-slate-950 border border-slate-800 flex items-center justify-between">
+            <span class="text-slate-400 text-[11px]"><i class="fa-solid fa-code-branch text-indigo-400 mr-1"></i> Branch:</span>
+            <span id="editor-git-branch" class="text-indigo-300 font-bold truncate max-w-[180px]"></span>
+          </div>
+          <div class="p-2 rounded bg-slate-950 border border-slate-800 flex items-center justify-between">
+            <span class="text-slate-400 text-[11px]"><i class="fa-solid fa-code-commit text-emerald-400 mr-1"></i> Commit:</span>
+            <span id="editor-git-commit" class="text-emerald-300 font-bold"></span>
+          </div>
+        </div>
+        <!-- Research Papers Container -->
+        <div id="editor-articles-container" class="space-y-1.5 pt-1.5 hidden border-t border-slate-800/80">
+          <div class="flex items-center justify-between text-[11px] font-semibold text-purple-300">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-book-bookmark text-purple-400"></i> Attached Research Papers & Verified Sources</span>
+            <span id="editor-articles-count" class="text-[10px] font-mono text-purple-400"></span>
+          </div>
+          <div id="editor-articles-list" class="space-y-1.5 max-h-48 overflow-y-auto pr-1"></div>
+        </div>
+        <!-- Hermes Skills Container -->
+        <div id="editor-skills-container" class="space-y-1.5 pt-1.5 hidden border-t border-slate-800/80">
+          <div class="flex items-center justify-between text-[11px] font-semibold text-cyan-300">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-screwdriver-wrench text-cyan-400"></i> Applied Hermes Skills (3)</span>
+            <span class="text-[10px] font-mono text-cyan-400">Task Specific</span>
+          </div>
+          <div id="editor-skills-list" class="flex items-center gap-1.5 flex-wrap"></div>
+        </div>
+      </div>
+
+      <input type="hidden" id="editor-repo-id">
+      <input type="hidden" id="editor-old-name">
+      <input type="hidden" id="editor-arch-principle">
+
+      <!-- Footer Buttons -->
+      <div class="flex items-center justify-between border-t border-slate-800 pt-3">
+        <button onclick="deleteCardEditor()" id="btn-card-delete" class="px-3.5 py-2 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600/30 border border-red-500/30 text-xs font-semibold flex items-center gap-1.5 transition">
+          <i class="fa-solid fa-trash"></i> Delete
+        </button>
+        <div class="flex items-center gap-3">
+          <button onclick="closeCardEditor()" class="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">Cancel</button>
+          <button onclick="saveCardEditor()" id="btn-card-save" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 shadow-lg shadow-emerald-600/30 flex items-center gap-1.5">
+            <i class="fa-solid fa-floppy-disk"></i> Save & Sync to GitHub Projects
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Context Menu for Cards -->
+  <div id="card-context-menu" class="fixed hidden z-50 glass rounded-xl border border-slate-700/80 p-1.5 shadow-2xl space-y-1 text-xs text-slate-200 min-w-[210px]">
+    <div id="ctx-card-title" class="px-2.5 py-1 text-[10px] font-mono text-slate-400 border-b border-slate-800 truncate font-bold"></div>
+    <button onclick="ctxActionEdit()" class="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-indigo-600/30 hover:text-indigo-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-pen-to-square text-indigo-400"></i> Edit with AI Refinement
+    </button>
+    <button onclick="ctxActionToggle()" class="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-700/50 flex items-center gap-2 transition">
+      <i class="fa-regular fa-circle-check text-emerald-400"></i> Toggle Status (Done / Pending)
+    </button>
+    <button onclick="ctxActionToggleApproval()" class="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-600/20 text-amber-300 flex items-center gap-2 transition">
+      <i class="fa-solid fa-bolt text-amber-400"></i> Toggle Execution Approval (⚡)
+    </button>
+    <button onclick="ctxActionDelete()" class="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-red-500/20 text-red-400 flex items-center gap-2 transition">
+      <i class="fa-solid fa-trash-can text-red-400"></i> Delete & Blacklist
+    </button>
+  </div>
+
+  <!-- Modal: Steering Memory & Human Guidance History -->
+  <div id="modal-steering-memory" class="fixed inset-0 bg-black/75 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-amber-500/40 w-full max-w-2xl p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-brain text-amber-400"></i> Architect Steering Memory & History
+        </h3>
+        <button onclick="closeSteeringHistoryModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+      </div>
+      <p class="text-xs text-slate-300">
+        Architectural steering memory. Strategic planners incorporate these persistent principles and negative blacklists during planning passes:
+      </p>
+      <div id="steering-history-content" class="space-y-4 text-xs font-mono">
+        <!-- Rendered dynamically -->
+      </div>
+      <div class="flex justify-end pt-2 border-t border-slate-800">
+        <button onclick="closeSteeringHistoryModal()" class="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Add New Repository -->
+  <div id="modal-add-repo" class="fixed inset-0 bg-black/75 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-indigo-500/40 w-full max-w-md p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-folder-plus text-indigo-400"></i> Connect GitHub Repository
+        </h3>
+        <button onclick="closeAddRepoModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Repository Name</label>
+          <input type="text" id="add-repo-name" placeholder="e.g. ROS 2 Navigation Stack" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">GitHub URL, Owner/Repo, or Local Path</label>
+          <input type="text" id="add-repo-path" placeholder="e.g. username/my-repo or /path/to/my-project" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 font-mono outline-none focus:border-indigo-500">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Category</label>
+            <select id="add-repo-category" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+              <option value="academic-latex-research">Academic LaTeX</option>
+              <option value="robotics-ros2">ROS 2 / Robotics</option>
+              <option value="web-automation">Web Automation</option>
+              <option value="general-software">General Software</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Priority</label>
+            <select id="add-repo-priority" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+              <option value="1">P1 (Highest / Thesis)</option>
+              <option value="2" selected>P2 (Medium / Systems)</option>
+              <option value="3">P3 (Background Tools)</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Planner Model</label>
+            <select id="add-repo-planner-model" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500 font-mono">
+              <option value="auto">🌟 Dynamic Waterfall (Auto)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 mb-1">Executor Model</label>
+            <select id="add-repo-executor-model" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500 font-mono">
+              <option value="auto">🌟 Default (gemini-3.8-flash)</option>
+            </select>
+          </div>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-slate-900/60 border border-slate-800">
+          <div>
+            <p class="text-xs font-semibold text-slate-200">Autonomous Planning Mode</p>
+            <p class="text-[10px] text-slate-400">Allow Opus to synthesize next milestones automatically</p>
+          </div>
+          <input type="checkbox" id="add-repo-auto" checked class="w-4 h-4 accent-indigo-500 rounded cursor-pointer">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-1">Daily Token Budget Est.</label>
+          <input type="number" id="add-repo-budget" value="60000" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 font-mono outline-none focus:border-indigo-500">
+        </div>
+      </div>
+      <div id="add-repo-status" class="text-xs text-emerald-400 font-mono hidden"></div>
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button onclick="closeAddRepoModal()" class="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">Cancel</button>
+        <button onclick="submitAddRepo()" id="btn-submit-add-repo" class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 flex items-center gap-1.5">
+          <i class="fa-solid fa-plus"></i> Connect & Track
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Delete Milestone Card with Blacklist Option -->
+  <div id="modal-delete-card" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-rose-900/60 w-full max-w-md p-6 space-y-4 shadow-2xl bg-slate-950/95">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-rose-300 flex items-center gap-2">
+          <i class="fa-solid fa-triangle-exclamation text-rose-400"></i> Delete Milestone Card
+        </h3>
+        <button onclick="closeDeleteCardModal()" class="text-slate-400 hover:text-white transition"><i class="fa-solid fa-times"></i></button>
+      </div>
+
+      <div class="space-y-3">
+        <p class="text-xs text-slate-300">Are you sure you want to delete this card from the active board and GitHub Projects?</p>
+        <div id="delete-card-target-name" class="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs font-semibold text-slate-100 font-mono">
+          <!-- Populated via JS -->
+        </div>
+
+        <!-- The Checkbox for Planner Blacklist / Attitude Effect -->
+        <label class="flex items-start gap-3 p-3.5 rounded-xl bg-rose-950/25 border border-rose-800/40 hover:border-rose-700/60 cursor-pointer transition">
+          <input type="checkbox" id="delete-card-blacklist-check" class="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-slate-700 bg-slate-800">
+          <div class="text-xs space-y-1">
+            <span class="font-bold text-rose-200 block">Effect on Planner Behavior (Add to Blacklist)</span>
+            <span class="text-slate-400 leading-relaxed block text-[11px]">
+              If checked, this milestone topic is added to the <strong>Planner Negative Constraints</strong>. The strategic planner and autonomous agents will be strictly instructed to <em>never re-generate or propose this scope again</em>.
+            </span>
+            <span class="text-slate-500 text-[10px] block italic">Leave unchecked to simply remove the card without influencing future planner attitude.</span>
+          </div>
+        </label>
+      </div>
+
+      <input type="hidden" id="delete-card-repo-id">
+      <input type="hidden" id="delete-card-milestone-name">
+
+      <div class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/60">
+        <button onclick="closeDeleteCardModal()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 transition">Cancel</button>
+        <button onclick="executeDeleteCard()" id="btn-confirm-delete-card" class="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-500 shadow-lg shadow-rose-900/30 flex items-center gap-1.5 transition">
+          <i class="fa-solid fa-trash"></i> Confirm Delete
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let globalData = {};
+
+    function switchTab(tabId) {
+      ['kanban', 'repos', 'telemetry', 'accounts', 'linkedin', 'bugfix'].forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        const btn = document.getElementById(`tab-btn-${t}`);
+        if (el) el.classList.add('hidden');
+        if (btn) {
+          btn.classList.remove('border-indigo-500', 'text-indigo-400');
+          btn.classList.add('border-transparent', 'text-slate-400');
+        }
+      });
+      const targetTab = document.getElementById(`tab-${tabId}`);
+      const targetBtn = document.getElementById(`tab-btn-${tabId}`);
+      if (targetTab) targetTab.classList.remove('hidden');
+      if (targetBtn) {
+        targetBtn.classList.add('border-indigo-500', 'text-indigo-400');
+        targetBtn.classList.remove('border-transparent', 'text-slate-400');
+      }
+      if (tabId === 'repos') {
+        renderRepos();
+      } else if (tabId === 'telemetry') {
+        renderTelemetry();
+      } else if (tabId === 'bugfix') {
+        renderBugfixQueue();
+      }
+    }
+
+    function updateRepoDropdowns() {
+      const repos = globalData.repositories || [];
+      if (!repos.length) return;
+
+      const repoOptionsHtml = repos.map(r => `<option value="${r.id}">[P${r.priority}] ${r.name}</option>`).join('');
+
+      // 1. Kanban filter dropdown
+      const filterSel = document.getElementById('repo-filter');
+      if (filterSel) {
+        const fullFilterHtml = '<option value="all">📁 All Repositories</option>' + repoOptionsHtml;
+        const currVal = filterSel.value;
+        if (filterSel.innerHTML !== fullFilterHtml) {
+          filterSel.innerHTML = fullFilterHtml;
+          if (currVal && Array.from(filterSel.options).some(o => o.value === currVal)) {
+            filterSel.value = currVal;
+          } else {
+            filterSel.value = 'all';
+          }
+        }
+      }
+
+      // 2. New Goal modal dropdown
+      const newGoalSel = document.getElementById('new-goal-repo');
+      if (newGoalSel) {
+        const isModalOpen = !document.getElementById('modal-add-goal')?.classList.contains('hidden');
+        if (!isModalOpen && newGoalSel.innerHTML !== repoOptionsHtml) {
+          const currVal = newGoalSel.value;
+          newGoalSel.innerHTML = repoOptionsHtml;
+          if (currVal && repos.some(r => r.id === currVal)) {
+            newGoalSel.value = currVal;
+          }
+        }
+      }
+
+      // 3. Steer modal dropdown
+      const steerSel = document.getElementById('steer-repo');
+      if (steerSel) {
+        const isModalOpen = !document.getElementById('modal-steer')?.classList.contains('hidden');
+        // Do not touch steer-repo dropdown while the modal is open or being interacted with
+        if (!isModalOpen && steerSel.innerHTML !== repoOptionsHtml) {
+          const currVal = steerSel.value;
+          steerSel.innerHTML = repoOptionsHtml;
+          if (currVal && repos.some(r => r.id === currVal)) {
+            steerSel.value = currVal;
+          }
+        }
+      }
+    }
+
+    async function fetchStatus() {
+      try {
+        if (!window.availableModels || window.availableModels.length === 0) {
+          await fetchModels();
+        }
+        const res = await fetch('/api/status');
+        globalData = await res.json();
+        updateHeader();
+        updateRepoDropdowns();
+        renderKanban();
+        renderRepos();
+        renderTelemetry();
+        renderAccounts();
+        renderLinkedIn();
+        renderBugfixQueue();
+      } catch (e) {
+        console.error("Fetch error:", e);
+      }
+    }
+
+    function updateHeader() {
+      const activeAgents = Object.keys(globalData.telemetry?.active_agents || {}).length;
+      document.getElementById('agent-count').innerText = `${activeAgents} Agent(s) Active`;
+
+      const tot = globalData.telemetry?.totals?.total_tokens || 0;
+      document.getElementById('total-tokens').innerText = `${tot.toLocaleString()} Tokens Burned`;
+
+      renderQuotaOptimizerHeader();
+    }
+
+    function renderQuotaOptimizerHeader() {
+      const q = globalData.quota_optimizer || {};
+      const isAutoRunning = globalData.orchestrator_running === true;
+
+      // Update Auto-Loop Toggle Button
+      const autoDot = document.getElementById('auto-pulse-dot');
+      const autoLabel = document.getElementById('auto-loop-label');
+      const btnAuto = document.getElementById('btn-toggle-auto');
+
+      if (autoDot && autoLabel && btnAuto) {
+        if (isAutoRunning) {
+          autoDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          autoLabel.innerText = "Auto: ON";
+          btnAuto.className = "px-3.5 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 text-xs font-semibold border border-emerald-500/40 transition flex items-center gap-2";
+        } else {
+          autoDot.className = "w-2 h-2 rounded-full bg-slate-500";
+          autoLabel.innerText = "Auto: OFF";
+          btnAuto.className = "px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition flex items-center gap-2";
+        }
+      }
+
+      // Update Quota Alarm Badge
+      const badgeAlarm = document.getElementById('badge-quota-alarm');
+      const alarmIcon = document.getElementById('quota-alarm-icon');
+      const alarmText = document.getElementById('quota-alarm-text');
+
+      if (badgeAlarm && alarmIcon && alarmText) {
+        if (q.status === 'WAITING_FOR_QUOTA' || q.alarm_active) {
+          const sec = q.seconds_remaining || 0;
+          const mins = Math.floor(sec / 60);
+          const remSec = sec % 60;
+          const timeStr = `${mins.toString().padStart(2, '0')}:${remSec.toString().padStart(2, '0')}`;
+
+          badgeAlarm.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-medium animate-pulse";
+          alarmIcon.className = "fa-solid fa-clock text-amber-400";
+          alarmText.innerText = `⏳ Quota Alarm: ${timeStr}`;
+        } else if (q.status === 'IN_PROGRESS') {
+          badgeAlarm.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-medium";
+          alarmIcon.className = "fa-solid fa-gear fa-spin text-indigo-400";
+          alarmText.innerText = `⚡ Executing Pass...`;
+        } else {
+          const pct = q.best_executor_percentage ? ` (${q.best_executor_percentage}%)` : '';
+          badgeAlarm.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-300 text-xs font-medium hover:border-teal-400/50";
+          alarmIcon.className = "fa-solid fa-bolt text-teal-400";
+          alarmText.innerText = `Quota Ready${pct}`;
+        }
+      }
+    }
+
+    async function toggleAutonomousLoop() {
+      try {
+        const resp = await fetch('/api/orchestrator/toggle_auto', { method: 'POST' });
+        const data = await resp.json();
+        if (data.running) {
+          alert("🚀 24/7 Autonomous Orchestrator Loop started in background!\nTasks and strategic planning will execute continuously while respecting token quotas.");
+        } else {
+          alert("⏸️ Autonomous Orchestrator Loop paused.");
+        }
+        fetchStatus();
+      } catch (err) {
+        alert("Error toggling autonomous orchestrator: " + err.message);
+      }
+    }
+
+    function openQuotaOptimizerModal() {
+      const modal = document.getElementById('modal-quota-optimizer');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+
+      const q = globalData.quota_optimizer || {};
+      const box = document.getElementById('optimizer-status-box');
+      const hLine = document.getElementById('optimizer-headline');
+      const msg = document.getElementById('optimizer-message');
+      const cd = document.getElementById('optimizer-countdown');
+      const orchStatus = document.getElementById('optimizer-orch-status');
+
+      orchStatus.innerText = globalData.orchestrator_running ? '🟢 RUNNING (PID ' + globalData.orchestrator_pid + ')' : '⚪ STOPPED (Standby)';
+      orchStatus.className = globalData.orchestrator_running ? 'text-emerald-400 font-bold' : 'text-slate-400 font-bold';
+
+      if (q.status === 'WAITING_FOR_QUOTA' || q.alarm_active) {
+        box.className = "p-4 rounded-xl border bg-amber-500/10 border-amber-500/30 text-amber-200 flex items-center justify-between gap-4";
+        hLine.innerText = "⏳ Quota Cooldown Active — System Waiting";
+        hLine.className = "text-xs font-bold uppercase tracking-wider text-amber-400";
+        msg.innerText = q.status_message || "All models are currently rate limited or exhausted. Waiting for safe replenishment.";
+        cd.innerText = `${q.minutes_remaining || 0} min (${q.next_run_iso || 'soon'})`;
+        cd.className = "text-lg font-mono font-bold text-amber-400";
+      } else {
+        box.className = "p-4 rounded-xl border bg-teal-500/10 border-teal-500/30 text-teal-200 flex items-center justify-between gap-4";
+        hLine.innerText = "🟢 Token Quotas Ready & Healthy";
+        hLine.className = "text-xs font-bold uppercase tracking-wider text-teal-400";
+        msg.innerText = q.status_message || "Sufficient token quotas detected. Multi-repo passes can run freely.";
+        cd.innerText = "READY NOW";
+        cd.className = "text-lg font-mono font-bold text-emerald-400";
+      }
+
+      // Populate accounts list
+      const list = document.getElementById('optimizer-accounts-list');
+      const accounts = globalData.accounts || [];
+      if (accounts.length === 0) {
+        list.innerHTML = `<div class="p-3 text-slate-500 font-mono text-center">No accounts detected in cloud_accounts.db</div>`;
+      } else {
+        list.innerHTML = accounts.map(a => `
+          <div class="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between text-xs font-mono">
+            <div>
+              <span class="text-white font-semibold">${a.email}</span>
+              ${a.health_warning ? `<span class="ml-2 px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 text-[10px] border border-red-500/30">${a.health_warning}</span>` : ''}
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-slate-400">Gemini: <b class="${a.gemini_5h_percent > 20 ? 'text-teal-400' : 'text-red-400'}">${a.gemini_5h_percent}%</b></span>
+              <span class="text-slate-400">Claude: <b class="${a.claude_opus > 0 ? 'text-purple-400' : 'text-slate-500'}">${a.claude_opus}%</b></span>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+
+    function closeQuotaOptimizerModal() {
+      document.getElementById('modal-quota-optimizer').classList.add('hidden');
+    }
+
+    function inferTaskSkills(m, repo) {
+      if (m && Array.isArray(m.skills) && m.skills.length >= 3) {
+        return m.skills.slice(0, 3);
+      }
+      const name = (m?.name || '').toLowerCase();
+      const details = (m?.details || '').toLowerCase();
+      const filepath = (m?.relative_filepath || '').toLowerCase();
+      const repoId = (repo?.id || '').toLowerCase();
+      const combined = `${name} ${details} ${filepath} ${repoId}`;
+
+      if (/\b(cas|sso|intranet|portal|dining|dorm|violentmonkey|userscript|tampermonkey)\b/i.test(combined)) {
+        return ['intranet-portal-automation-v5', 'systematic-debugging', 'test-driven-development'];
+      }
+      if (/\b(kanban|cockpit|orchestrator|telemetry|quota optimizer|failed_tasks)\b/i.test(combined)) {
+        return ['multi-repo-kanban-cockpit-v25', 'github-projects-workflow', 'adaptive-rate-and-token-governor'];
+      }
+      if (/\b(campus network|singbox|v2ray|resolvectl|dns routing|captive portal)\b/i.test(combined)) {
+        return ['campus-network-routing-v2', 'systematic-debugging', 'campus-network-routing'];
+      }
+      if (/\b(map2gz|gazebo|sdformat|sdf|pgm_to_sdf|occupancy grid)\b/i.test(combined)) {
+        return ['ros-gazebo-world-generation', 'codebase-inspection', 'test-driven-development'];
+      }
+      if (filepath.endsWith('.tex') || repoId === 'phd_proposal' || combined.includes('xepersian') || combined.includes('latex') || combined.includes('proposal')) {
+        if (/\b(fix|align|error|typograph|overflow|prompt v2\.8|correct|reconcile)\b/i.test(combined)) {
+          return ['persian-academic-latex', 'systematic-debugging', 'codebase-inspection'];
+        } else if (/\b(literature|survey|paper|ingestion|taxonomy|review|bibtex|citation)\b/i.test(combined)) {
+          return ['persian-academic-latex', 'grounded-citations', 'arxiv'];
+        } else if (/\b(ros 2|ros2|costmap|lifecycle|cbf|shield|hardware|driver|uart|can)\b/i.test(combined)) {
+          return ['persian-academic-latex', 'ros-gazebo-world-generation', 'codebase-inspection'];
+        } else if (/\b(drl|reinforcement|reward|policy|actor-critic|pomdp)\b/i.test(combined)) {
+          return ['persian-academic-latex', 'research-paper-writing', 'codebase-inspection'];
+        } else {
+          return ['persian-academic-latex', 'research-paper-writing', 'grounded-citations'];
+        }
+      }
+      if (/\b(ros 2|ros2|nav2|costmap|cbf|sensor ring|wheelchair)\b/i.test(combined)) {
+        return ['ros-gazebo-world-generation', 'codebase-inspection', 'test-driven-development'];
+      }
+      if (/\b(drl|ppo|reinforcement|actor-critic|neural)\b/i.test(combined)) {
+        return ['research-paper-writing', 'codebase-inspection', 'test-driven-development'];
+      }
+      if (/\b(pull request|pr workflow|code review|github issue)\b/i.test(combined)) {
+        return ['github-pr-workflow', 'github-code-review', 'github-issues'];
+      }
+      return ['systematic-debugging', 'test-driven-development', 'codebase-inspection'];
+    }
+
+    function renderKanban() {
+      const filter = document.getElementById('repo-filter').value;
+      const colBacklog = document.getElementById('col-backlog');
+      const colReady = document.getElementById('col-ready');
+      const colInprog = document.getElementById('col-inprogress');
+      const colInreview = document.getElementById('col-inreview');
+      const colDone = document.getElementById('col-done');
+
+      colBacklog.innerHTML = '';
+      colReady.innerHTML = '';
+      colInprog.innerHTML = '';
+      colInreview.innerHTML = '';
+      colDone.innerHTML = '';
+
+      window.cardRegistry = {};
+
+      let cBacklog = 0, cReady = 0, cInprog = 0, cInreview = 0, cDone = 0;
+
+      const workingTasks = Object.values(globalData.telemetry?.active_agents || {}).map(a => a.current_task);
+
+      (globalData.repositories || []).forEach(repo => {
+        if (filter !== 'all' && repo.id !== filter) return;
+
+        (repo.milestones || []).forEach(m => {
+          const isWorking = workingTasks.some(wt => wt.includes(m.name));
+          let col = 'backlog';
+          const ghCol = (m.github_column || '').toLowerCase().trim();
+          const isRepoAutoApprove = Boolean(repo.auto_approve_plans);
+          const isApproved = Boolean(m.approved_for_auto_run) || isRepoAutoApprove;
+
+          if (m.status === 'completed' || ghCol === 'done') {
+            col = 'done';
+          } else if (m.status === 'in_review' || ghCol === 'in review') {
+            col = 'inreview';
+          } else if (isWorking) {
+            col = 'inprogress';
+          } else if (m.status === 'ready' || ghCol === 'ready' || (m.status === 'in_progress' && isApproved)) {
+            col = 'ready';
+          } else if (m.status === 'pending' || m.status === 'todo') {
+            col = isApproved ? 'ready' : (ghCol === 'backlog' ? 'backlog' : 'ready');
+          } else if (ghCol === 'backlog') {
+            col = isApproved ? 'ready' : 'backlog';
+          } else {
+            col = isApproved ? 'ready' : 'backlog';
+          }
+
+          const cardKey = `${repo.id}:::${encodeURIComponent(m.name)}`;
+          window.cardRegistry[cardKey] = { repo, m };
+
+          const isAiDev = Boolean(m.is_ai_development || (m.planned_by && !m.is_recovery));
+          const isRecovery = Boolean(m.is_recovery);
+
+          let approvalBtnHtml = '';
+          if (m.status !== 'completed' && isAiDev && !isRecovery) {
+            approvalBtnHtml = `
+              <button onclick="event.stopPropagation(); toggleAutoApproval('${repo.id}', '${m.name.replace(/'/g, "\\'")}')" 
+                      class="w-6 h-6 rounded-md flex items-center justify-center text-xs transition shadow-sm ${isApproved ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/60 hover:bg-emerald-500/35 shadow-emerald-500/20' : 'bg-slate-800/90 text-amber-400/80 border border-amber-500/30 hover:border-amber-400 hover:text-amber-300 hover:bg-amber-500/15'}" 
+                      title="${isRepoAutoApprove ? '⚡ Repository Auto-Approve active (auto-executes)' : (isApproved ? '⚡ Approved for execution (click to revoke)' : '⚡ Click to approve for execution')}">
+                <span class="${isApproved ? 'animate-pulse' : 'opacity-70 hover:opacity-100'}">⚡</span>
+              </button>
+            `;
+          } else if (isRecovery && m.status !== 'completed') {
+            approvalBtnHtml = `
+              <span class="w-6 h-6 rounded-md flex items-center justify-center text-xs bg-blue-500/15 text-blue-300 border border-blue-500/30" title="🛠️ Emergency Auto-Recovery">
+                <span>🛠️</span>
+              </span>
+            `;
+          }
+
+          let cardBorderClass = "bg-slate-800/80 border-slate-700/80";
+          if (m.status !== 'completed' && isAiDev && !isRecovery) {
+            cardBorderClass = isApproved ? "bg-slate-800/90 border-emerald-500/40 hover:border-emerald-500/70" : "bg-slate-800/90 border-amber-500/40 hover:border-amber-500/70";
+          }
+
+          const card = document.createElement('div');
+          card.className = `card-kanban p-3.5 rounded-xl border text-xs space-y-2 shadow-sm cursor-pointer transition hover:bg-slate-800 ${cardBorderClass}`;
+          card.onclick = (e) => {
+            if (!e.target.closest('button')) {
+              openCardEditorByKey(cardKey);
+            }
+          };
+          card.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showCardContextMenu(e, cardKey);
+          };
+          
+          let repoBadgeColor = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+          if (repo.priority === 2) repoBadgeColor = "bg-amber-500/20 text-amber-300 border-amber-500/30";
+          if (repo.priority === 3) repoBadgeColor = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+
+          let modelName = m.planned_by || m.added_by || "Claude Opus 4.6";
+          let modelBadgeClass = "bg-purple-500/20 text-purple-300 border-purple-500/30";
+          let modelIcon = "fa-brain text-purple-400";
+          
+          const mLower = modelName.toLowerCase();
+          if (mLower.includes("sonnet")) {
+            modelBadgeClass = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+            modelIcon = "fa-bolt text-indigo-400";
+          } else if (mLower.includes("pro")) {
+            modelBadgeClass = "bg-blue-500/20 text-blue-300 border-blue-500/30";
+            modelIcon = "fa-gem text-blue-400";
+          } else if (mLower.includes("flash")) {
+            modelBadgeClass = "bg-teal-500/20 text-teal-300 border-teal-500/30";
+            modelIcon = "fa-bolt-lightning text-teal-400";
+          } else if (mLower.includes("human") || mLower.includes("user")) {
+            modelBadgeClass = "bg-amber-500/20 text-amber-300 border-amber-500/30";
+            modelIcon = "fa-user-pen text-amber-400";
+          }
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border ${repoBadgeColor}">
+                  [P${repo.priority}] ${repo.name.split(' ')[0]}
+                </span>
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-medium border ${modelBadgeClass}" title="Planner AI Model">
+                  <i class="fa-solid ${modelIcon}"></i> ${modelName.replace(" (Thinking)", "").replace(" (Human Steered)", "")}
+                </span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                ${approvalBtnHtml}
+                <button onclick="event.stopPropagation(); toggleMilestone('${repo.id}', '${m.name.replace(/'/g, "\\'")}', '${m.status === 'completed' ? 'pending' : 'completed'}')" class="text-slate-400 hover:text-emerald-400 transition" title="Toggle Done">
+                  <i class="fa-${m.status === 'completed' ? 'solid text-emerald-400' : 'regular'} fa-circle-check text-sm"></i>
+                </button>
+              </div>
+            </div>
+            <p class="font-bold text-slate-100 text-xs leading-snug">${m.name}</p>
+            <p class="text-slate-400 text-[11px] leading-relaxed line-clamp-2">${m.details || 'No detailed specifications.'}</p>
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-700/40 text-[10px] text-slate-400 font-mono">
+              <span class="truncate max-w-[180px] text-slate-400" title="${m.relative_filepath || ''}">
+                <i class="fa-regular fa-file-code text-slate-500"></i> ${m.relative_filepath ? m.relative_filepath.split('/').pop() : 'no file'}
+              </span>
+              <div class="flex items-center gap-1.5">
+                ${m.last_edited_by_human ? `<span class="text-[9px] text-emerald-400 font-mono" title="Human Steered"><i class="fa-solid fa-user-check"></i> Steered</span>` : ''}
+                ${m.github_column ? `<span class="inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-slate-300 text-[9px]"><i class="fa-brands fa-github text-slate-400"></i> ${m.github_column}</span>` : ''}
+              </div>
+            </div>
+            ${(m.commit_hash || m.branch || (m.artifacts && m.artifacts.articles && m.artifacts.articles.length)) ? `
+              <div class="flex items-center gap-1.5 flex-wrap pt-1 text-[9px] font-mono">
+                ${m.branch ? `
+                  <span class="px-1.5 py-0.5 rounded bg-indigo-950/70 text-indigo-300 border border-indigo-500/30 flex items-center gap-1 truncate max-w-[140px]" title="Active Branch: ${m.branch}">
+                    <i class="fa-solid fa-code-branch text-indigo-400"></i> ${m.branch.replace('feat/', '')}
+                  </span>
+                ` : ''}
+                ${m.commit_hash && m.commit_hash !== 'local' ? `
+                  ${m.commit_url ? `
+                    <a href="${m.commit_url}" target="_blank" onclick="event.stopPropagation()" class="px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 hover:underline hover:text-emerald-200" title="View Commit in GitHub">
+                      <i class="fa-solid fa-code-commit text-emerald-400"></i> ${m.commit_hash}
+                    </a>
+                  ` : `
+                    <span class="px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-500/30 flex items-center gap-1" title="Git Commit SHA">
+                      <i class="fa-solid fa-code-commit text-emerald-400"></i> ${m.commit_hash}
+                    </span>
+                  `}
+                ` : ''}
+                ${(m.artifacts && m.artifacts.articles && m.artifacts.articles.length) ? `
+                  <span class="px-1.5 py-0.5 rounded bg-purple-950/70 text-purple-300 border border-purple-500/30 flex items-center gap-1" title="${m.artifacts.articles.length} Research Papers Attached">
+                    <i class="fa-solid fa-book-bookmark text-purple-400"></i> ${m.artifacts.articles.length} papers
+                  </span>
+                ` : ''}
+              </div>
+            ` : ''}
+            ${(() => {
+              const isDone = (col === 'done' || m.status === 'completed');
+              const skills = (m.skills && m.skills.length >= 3) ? m.skills.slice(0, 3) : (isDone ? inferTaskSkills(m, repo) : null);
+              if (!skills || !skills.length) return '';
+              return `
+                <div class="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-700/40 text-[9px] font-mono">
+                  <span class="text-cyan-400 font-semibold flex items-center gap-1" title="Hermes Skills Applied to this Task">
+                    <i class="fa-solid fa-screwdriver-wrench text-cyan-400 text-[8px]"></i> Skills:
+                  </span>
+                  ${skills.slice(0, 3).map(s => `
+                    <span class="px-1.5 py-0.5 rounded bg-cyan-950/70 text-cyan-300 border border-cyan-500/30 flex items-center gap-1 hover:border-cyan-400 transition" title="Applied Hermes Skill: ${s}">
+                      <i class="fa-solid fa-tag text-[7px] text-cyan-400"></i> ${s}
+                    </span>
+                  `).join('')}
+                </div>
+              `;
+            })()}
+          `;
+
+          if (col === 'backlog') { colBacklog.appendChild(card); cBacklog++; }
+          else if (col === 'ready') { colReady.appendChild(card); cReady++; }
+          else if (col === 'inprogress') { colInprog.appendChild(card); cInprog++; }
+          else if (col === 'inreview') { colInreview.appendChild(card); cInreview++; }
+          else { colDone.appendChild(card); cDone++; }
+        });
+      });
+
+      document.getElementById('count-backlog').innerText = cBacklog;
+      document.getElementById('count-ready').innerText = cReady;
+      document.getElementById('count-inprogress').innerText = cInprog;
+      document.getElementById('count-inreview').innerText = cInreview;
+      document.getElementById('count-done').innerText = cDone;
+    }
+
+    function renderRepos() {
+      const grid = document.getElementById('repos-grid');
+      if (!grid) return;
+
+      // Anti-jump Guard: If user is actively typing, focusing, or interacting with a SELECT/INPUT in repos-grid,
+      // DO NOT wipe and re-render the DOM! This ensures select dropdowns never close or jump mid-selection.
+      // NOTE: Buttons do NOT block re-rendering so toggles and mode switches update immediately.
+      const activeEl = document.activeElement;
+      const isEditingInput = activeEl && grid.contains(activeEl) && ['SELECT', 'INPUT', 'TEXTAREA'].includes(activeEl.tagName);
+      if (window.isUserInteractingWithRepos || isEditingInput) {
+        return;
+      }
+
+      grid.innerHTML = '';
+
+      const repos = globalData.repositories || [];
+      const allApproveBtn = document.getElementById('btn-toggle-all-approve');
+      const allApproveLabel = document.getElementById('label-all-auto-approve');
+      if (allApproveBtn && allApproveLabel) {
+        const allOn = repos.length > 0 && repos.every(r => r.auto_approve_plans);
+        const anyOn = repos.some(r => r.auto_approve_plans);
+        if (allOn) {
+          allApproveBtn.className = "px-3.5 py-2 rounded-lg bg-amber-500/25 text-amber-300 hover:bg-amber-500/35 border border-amber-500/50 text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-amber-500/20 transition";
+          allApproveLabel.innerText = "Auto-Approve All: ON";
+        } else if (anyOn) {
+          allApproveBtn.className = "px-3.5 py-2 rounded-lg bg-amber-600/15 text-amber-400/90 hover:bg-amber-600/25 border border-amber-500/30 text-xs font-semibold flex items-center gap-1.5 transition";
+          allApproveLabel.innerText = "Auto-Approve: MIXED";
+        } else {
+          allApproveBtn.className = "px-3.5 py-2 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition";
+          allApproveLabel.innerText = "Auto-Approve All: OFF";
+        }
+      }
+
+      if (repos.length === 0) {
+        grid.innerHTML = `<div class="col-span-full p-8 text-center text-slate-500 font-mono glass rounded-xl border border-slate-800">No repositories configured yet. Click "Connect GitHub Repo" to add one!</div>`;
+        return;
+      }
+
+      repos.forEach(r => {
+        const totalM = (r.milestones || []).length;
+        const doneM = (r.milestones || []).filter(m => m.status === 'completed').length;
+        const inprogM = (r.milestones || []).filter(m => m.status === 'in_progress').length;
+        const pendingM = totalM - doneM - inprogM;
+        const isAuto = r.auto_planning !== false;
+        const isAutoApprove = Boolean(r.auto_approve_plans);
+        const isManualPlanner = Boolean(r.planner_model && r.planner_model !== 'auto');
+
+        let prioColor = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+        if (r.priority === 2) prioColor = "bg-amber-500/20 text-amber-300 border-amber-500/30";
+        if (r.priority === 3) prioColor = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+
+        const card = document.createElement('div');
+        card.className = "p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 space-y-4 shadow-xl transition relative flex flex-col justify-between";
+        card.innerHTML = `
+          <div class="space-y-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${prioColor}">
+                    P${r.priority}
+                  </span>
+                  <span class="text-[10px] text-slate-400 font-mono px-2 py-0.5 rounded bg-slate-800">${r.category || 'general'}</span>
+                </div>
+                <h3 class="text-sm font-bold text-white">${r.name}</h3>
+              </div>
+              <button onclick="deleteRepo('${r.id}', '${r.name.replace(/'/g, "\\'")}')" class="text-slate-500 hover:text-red-400 p-1.5 rounded-lg bg-slate-800/50 hover:bg-red-500/10 border border-transparent hover:border-red-500/30 transition" title="Remove Repository from Tracking">
+                <i class="fa-solid fa-trash-can text-xs"></i>
+              </button>
+            </div>
+
+            <div class="text-[11px] font-mono text-slate-300 bg-slate-950/80 border border-slate-800/90 rounded-lg p-2.5 truncate" title="${r.path}">
+              <i class="fa-regular fa-folder text-indigo-400 mr-1.5"></i> ${r.path}
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-slate-950/40 rounded-xl border border-slate-800/50">
+              <div>
+                <span class="block text-slate-400 text-[10px] uppercase">Pending</span>
+                <span class="font-bold text-amber-400 font-mono">${pendingM}</span>
+              </div>
+              <div>
+                <span class="block text-slate-400 text-[10px] uppercase">In Progress</span>
+                <span class="font-bold text-indigo-400 font-mono">${inprogM}</span>
+              </div>
+              <div>
+                <span class="block text-slate-400 text-[10px] uppercase">Done</span>
+                <span class="font-bold text-emerald-400 font-mono">${doneM}</span>
+              </div>
+            </div>
+
+            <!-- Auto-Planning Autonomous Mode Toggle -->
+            <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+              <div>
+                <p class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <i class="fa-solid fa-robot ${isAuto ? 'text-indigo-400' : 'text-slate-500'}"></i> Autonomous Planning
+                </p>
+                <p class="text-[10px] text-slate-400">
+                  ${isAuto ? 'Active: Agents automatically replenish completed milestones' : 'Paused: Agents wait for manual directives'}
+                </p>
+              </div>
+              <button onclick="toggleRepoAuto('${r.id}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition ${isAuto ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'}">
+                ${isAuto ? '<i class=\"fa-solid fa-toggle-on text-emerald-400 mr-1\"></i> ON' : '<i class=\"fa-solid fa-toggle-off text-slate-500 mr-1\"></i> OFF'}
+              </button>
+            </div>
+
+            <!-- Auto-Approve AI Plans (Bypass Human Approval) -->
+            <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+              <div>
+                <p class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <i class="fa-solid fa-bolt ${isAutoApprove ? 'text-amber-400' : 'text-slate-500'}"></i> Auto-Approve Plans
+                </p>
+                <p class="text-[10px] text-slate-400">
+                  ${isAutoApprove ? 'Active: AI plans execute automatically' : 'Manual approval required in Backlog'}
+                </p>
+              </div>
+              <button onclick="toggleRepoAutoApprove('${r.id}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition ${isAutoApprove ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm shadow-amber-500/20' : 'bg-slate-800 text-slate-400 border border-slate-700'}">
+                ${isAutoApprove ? '<i class=\"fa-solid fa-toggle-on text-amber-400 mr-1\"></i> AUTO-RUN' : '<i class=\"fa-solid fa-toggle-off text-slate-500 mr-1\"></i> MANUAL'}
+              </button>
+            </div>
+
+            <!-- Planning Buffer Cap -->
+            <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+              <div>
+                <p class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <i class="fa-solid fa-layer-group text-purple-400"></i> Planning Buffer Cap
+                </p>
+                <p class="text-[10px] text-slate-400">
+                  Target active backlog task buffer depth
+                </p>
+              </div>
+              <div class="flex items-center gap-1.5 bg-slate-900 border border-purple-500/30 rounded-lg p-1">
+                <button onclick="adjustRepoCap('${r.id}', -1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center transition" title="Decrease Cap">-</button>
+                <span class="w-8 text-center font-mono font-bold text-xs text-purple-300" id="cap-val-${r.id}">${r.milestone_cap || 3}</span>
+                <button onclick="adjustRepoCap('${r.id}', 1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center transition" title="Increase Cap">+</button>
+              </div>
+            </div>
+
+            <!-- Dynamic Model Selection (Planner Strategy & Executor Model) -->
+            <div class="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+              <!-- Planner Agent Strategy -->
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <i class="fa-solid fa-brain text-purple-400"></i> Planner Strategy
+                  </span>
+                  <span class="text-[10px] font-mono px-2 py-0.5 rounded border ${isManualPlanner ? 'bg-purple-500/20 text-purple-300 border-purple-500/40' : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'}">
+                    ${isManualPlanner ? '🎯 Manual' : '🌊 Smart Waterfall'}
+                  </span>
+                </div>
+
+                <!-- Mode Switcher: Waterfall vs Manual -->
+                <div class="grid grid-cols-2 gap-1.5 p-1 bg-slate-900 rounded-lg border border-slate-800 text-xs font-semibold">
+                  <button type="button" onclick="setPlannerMode('${r.id}', 'waterfall')" 
+                          class="py-1.5 px-2 rounded-md transition flex items-center justify-center gap-1.5 ${!isManualPlanner ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-500/40 shadow-sm' : 'text-slate-400 hover:text-slate-200'}">
+                    <span>🌊</span> Smart Waterfall
+                  </button>
+                  <button type="button" onclick="setPlannerMode('${r.id}', 'manual')" 
+                          class="py-1.5 px-2 rounded-md transition flex items-center justify-center gap-1.5 ${isManualPlanner ? 'bg-purple-600/30 text-purple-200 border border-purple-500/40 shadow-sm' : 'text-slate-400 hover:text-slate-200'}">
+                    <span>🎯</span> Manual Model
+                  </button>
+                </div>
+
+                ${!isManualPlanner ? `
+                  <p class="text-[10px] text-cyan-400/80 bg-cyan-950/20 border border-cyan-900/30 rounded-lg p-2 flex items-center gap-1.5">
+                    <i class="fa-solid fa-bolt text-cyan-400"></i>
+                    <span>Auto-evaluates top reasoning models with live quota availability.</span>
+                  </p>
+                ` : `
+                  <div class="space-y-1 pt-1">
+                    <label class="block text-[10px] text-slate-400 font-medium">Select Planner Model:</label>
+                    <select onfocus="window.isUserInteractingWithRepos=true" 
+                            onblur="window.isUserInteractingWithRepos=false" 
+                            onchange="window.isUserInteractingWithRepos=false; updateRepoModels('${r.id}')" 
+                            id="planner-model-${r.id}" 
+                            class="w-full bg-slate-900 border border-purple-500/40 rounded-lg p-2 text-[11px] text-purple-200 outline-none focus:border-purple-400 font-mono">
+                      ${buildModelOptions(r.planner_model, 'Select Model...', false)}
+                    </select>
+                  </div>
+                `}
+              </div>
+
+              <!-- Executor Model -->
+              <div class="border-t border-slate-800/80 pt-2.5 space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <i class="fa-solid fa-bolt text-indigo-400"></i> Executor Model
+                  </span>
+                  <span class="text-[10px] font-mono text-indigo-300 bg-indigo-950/50 border border-indigo-500/30 px-2 py-0.5 rounded truncate max-w-[130px]" title="${r.executor_model || 'Default (gemini-3.8-flash-tiered)'}">
+                    ${r.executor_model ? r.executor_model.split('/').pop() : 'Default'}
+                  </span>
+                </div>
+                <select onfocus="window.isUserInteractingWithRepos=true" 
+                        onblur="window.isUserInteractingWithRepos=false" 
+                        onchange="window.isUserInteractingWithRepos=false; updateRepoModels('${r.id}')" 
+                        id="executor-model-${r.id}" 
+                        class="w-full bg-slate-900 border border-slate-700/80 rounded-lg p-2 text-[11px] text-slate-200 outline-none focus:border-indigo-500 font-mono">
+                  ${buildModelOptions(r.executor_model, 'Default (gemini-3.8-flash-tiered)', true)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 border-t border-slate-800/80 pt-3">
+            <span class="text-[10px] text-slate-500 font-mono">Budget: ${(r.daily_token_budget_est || 60000).toLocaleString()} tok</span>
+            <button onclick="openAddGoalForRepo('${r.id}')" class="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 text-xs font-semibold flex items-center gap-1.5 transition">
+              <i class="fa-solid fa-plus text-xs"></i> Add Milestone
+            </button>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function renderTelemetry() {
+      // 0. Adaptive Rate Governor
+      const gov = globalData.rate_governor || {};
+      const badge = document.getElementById('governor-status-badge');
+      if (badge) {
+        const tier = gov.tier || gov.status || 'BALANCED';
+        badge.innerText = tier;
+        if (tier.includes('EXPEDITE') || tier.includes('OPTIMAL')) {
+          badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800';
+        } else if (tier.includes('LOCKDOWN') || tier.includes('BACKOFF')) {
+          badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800 animate-pulse';
+        } else if (tier.includes('LEAN') || tier.includes('CONSERVE')) {
+          badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800';
+        } else {
+          badge.className = 'px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-950 text-indigo-400 border border-indigo-800';
+        }
+      }
+      const elTier = document.getElementById('gov-tier');
+      if (elTier) elTier.innerText = gov.tier || 'BALANCED';
+      const elConc = document.getElementById('gov-concurrency');
+      if (elConc) elConc.innerText = `${gov.safe_concurrency || gov.current_concurrency || 2} workers active`;
+      const elTokens = document.getElementById('gov-max-tokens');
+      if (elTokens) elTokens.innerText = `${(gov.max_tokens || 3400).toLocaleString()} max`;
+      const elStag = document.getElementById('gov-stagger');
+      if (elStag) elStag.innerText = `${gov.stagger_delay_sec || 4.0}s`;
+      const elScore = document.getElementById('gov-rl-score');
+      if (elScore) elScore.innerText = `${gov.penalty_score || 0.0} / +${gov.reward_score || 0.0}`;
+      const elStreak = document.getElementById('gov-streak');
+      if (elStreak) elStreak.innerText = `${gov.consecutive_successes || 0} clean streak`;
+      const elQuota = document.getElementById('gov-min-quota');
+      if (elQuota) elQuota.innerText = `${gov.min_quota_pct !== undefined ? gov.min_quota_pct : 78}%`;
+      const elCool = document.getElementById('gov-cooldown');
+      if (elCool) {
+        const rem = gov.cooldown_remaining_sec || 0;
+        elCool.innerText = rem > 0 ? `Cooldown: ${rem}s` : 'Cooldown: 0s';
+        elCool.className = rem > 0 ? 'text-[10px] text-rose-400 font-bold block animate-pulse' : 'text-[10px] text-slate-500 block';
+      }
+      const elDetails = document.getElementById('gov-details');
+      if (elDetails && gov.details) elDetails.innerText = gov.details;
+
+      // 1. Active Agents
+      const agents = globalData.telemetry?.active_agents || {};
+      const container = document.getElementById('active-agents-table');
+      if (container) {
+        if (Object.keys(agents).length === 0) {
+          container.innerHTML = `<div class="p-4 text-center text-slate-500 font-mono bg-slate-950/40 rounded-lg border border-slate-800/60">No autonomous agents currently executing tasks. (Idle / Ready)</div>`;
+        } else {
+          let html = `<table class="w-full text-left">
+            <tr class="text-slate-400 border-b border-slate-800 pb-2">
+              <th class="py-2">Agent ID</th>
+              <th>Role</th>
+              <th>Model</th>
+              <th>Repository</th>
+              <th>Current Task</th>
+              <th>Started / Active</th>
+            </tr>`;
+          Object.entries(agents).forEach(([id, a]) => {
+            const nowSec = Math.floor(Date.now() / 1000);
+            const startSec = a.start_ts || (a.started_at ? Math.floor(new Date(a.started_at).getTime() / 1000) : nowSec);
+            const elapsed = Math.max(0, nowSec - startSec);
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            const elapsedBadge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+            
+            const timeDisplay = a.started_at ? (a.started_at.split(' ')[1] || a.started_at) : '';
+
+            const sessionBadge = a.hermes_session_id 
+              ? `<span class="block text-[10px] text-amber-400 font-mono cursor-pointer hover:underline" title="Hermes Session ID (Click to copy)" onclick="navigator.clipboard.writeText('${a.hermes_session_id}')"><i class="fa-solid fa-terminal mr-1"></i>${a.hermes_session_id}</span>`
+              : '';
+
+            html += `<tr class="border-b border-slate-800/50">
+              <td class="py-2.5 font-mono text-indigo-400 font-bold">
+                <div>${id.slice(0, 18)}</div>
+                ${sessionBadge}
+              </td>
+              <td class="font-semibold text-slate-200">${a.role}</td>
+              <td><span class="px-2 py-0.5 rounded bg-slate-800 font-mono text-[11px] text-purple-300">${a.model}</span></td>
+              <td class="text-slate-300">${a.repo_name}</td>
+              <td class="text-slate-200 max-w-xs truncate">${a.current_task}</td>
+              <td class="font-mono">
+                <span class="text-slate-400 text-xs">${timeDisplay}</span>
+                <span class="ml-2 px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 text-[10px] border border-emerald-800/60 font-semibold animate-pulse">Running ${elapsedBadge}</span>
+              </td>
+            </tr>`;
+          });
+          html += `</table>`;
+          container.innerHTML = html;
+        }
+      }
+
+      // 1.5. Phoenix Live Diagnostic Logs & Traces
+      const traces = globalData.phoenix_traces || [];
+      const tracesCont = document.getElementById('phoenix-traces-container');
+      if (tracesCont) {
+        if (traces.length === 0) {
+          tracesCont.innerHTML = `<div class="p-4 text-center text-slate-500 font-mono bg-slate-950/40 rounded-lg border border-slate-800/60">No Phoenix agent traces recorded yet. Traces will stream live as soon as an agent executes.</div>`;
+        } else {
+          let tHtml = '';
+          traces.forEach((tr, idx) => {
+            const isErr = tr.status === 'ERROR' || Boolean(tr.error_message);
+            const statusBadge = isErr 
+              ? `<span class="px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800 font-bold text-[10px] flex items-center gap-1"><i class="fa-solid fa-triangle-exclamation"></i> FAILED</span>`
+              : `<span class="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 font-semibold text-[10px] flex items-center gap-1"><i class="fa-solid fa-check"></i> SUCCESS</span>`;
+            
+            const totalTok = tr.tokens?.total || 0;
+            const inTok = tr.tokens?.prompt || 0;
+            const outTok = tr.tokens?.completion || 0;
+            const latStr = tr.latency_s ? `${tr.latency_s}s` : 'N/A';
+            const detailId = `trace-detail-${idx}`;
+
+            tHtml += `
+              <div class="p-3 rounded-lg bg-slate-950/70 border ${isErr ? 'border-rose-900/60' : 'border-slate-800/80'} hover:border-slate-700 transition">
+                <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+                  <div class="flex items-center gap-2">
+                    ${statusBadge}
+                    <span class="font-bold text-slate-200 text-xs">${tr.role}</span>
+                    <span class="px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800/60 font-mono text-[11px]">${tr.model}</span>
+                    <span class="text-slate-400 text-[11px]">• ${tr.repo}</span>
+                  </div>
+                  <div class="flex items-center gap-3 text-[11px] font-mono text-slate-400">
+                    <span><i class="fa-regular fa-clock text-slate-500"></i> ${tr.time_display} (${latStr})</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-900 text-indigo-300 border border-slate-800">${totalTok.toLocaleString()} tok (${inTok} in / ${outTok} out)</span>
+                    <button onclick="toggleTraceDetail('${detailId}')" class="text-cyan-400 hover:text-cyan-300 transition text-[11px] underline">Inspect Log</button>
+                  </div>
+                </div>
+
+                ${isErr ? `<div class="p-2 mb-2 rounded bg-rose-950/50 border border-rose-800/60 text-rose-300 font-mono text-[11px]"><i class="fa-solid fa-circle-exclamation mr-1"></i> ${tr.error_message || 'Execution error during agent invocation'}</div>` : ''}
+
+                <div id="${detailId}" class="hidden mt-2 pt-2 border-t border-slate-800 space-y-2">
+                  ${tr.input_snippet ? `
+                    <div>
+                      <span class="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Prompt & Instructions:</span>
+                      <pre class="bg-slate-900/90 p-2 rounded text-[11px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap max-h-36">${escapeHtml(tr.input_snippet)}</pre>
+                    </div>
+                  ` : ''}
+                  ${tr.output_snippet ? `
+                    <div>
+                      <span class="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Model Generated Artifact / Output:</span>
+                      <pre class="bg-slate-900/90 p-2 rounded text-[11px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap max-h-36">${escapeHtml(tr.output_snippet)}</pre>
+                    </div>
+                  ` : ''}
+                  <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                    <span>Trace ID: <code class="text-cyan-400">${tr.span_id || 'N/A'}</code></span>
+                    <a href="http://127.0.0.1:6006" target="_blank" class="text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1">Open in Phoenix UI <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></a>
+                  </div>
+                </div>
+              </div>
+            `;
+          });
+          tracesCont.innerHTML = tHtml;
+        }
+      }
+
+      // 2. Repo Tokens
+      const repoStats = globalData.telemetry?.repo_stats || {};
+      const rCont = document.getElementById('repo-tokens-table');
+      if (rCont) {
+        rCont.innerHTML = '';
+        const repoList = Object.values(repoStats);
+        if (repoList.length === 0) {
+          rCont.innerHTML = '<div class="p-3 text-center text-slate-500 font-mono">No repository token burn recorded yet.</div>';
+        } else {
+          repoList.forEach(r => {
+            const tot = (r.input_tokens || 0) + (r.output_tokens || 0);
+            const calls = r.api_calls || r.invocations || 0;
+            rCont.innerHTML += `
+              <div class="p-3 rounded-lg bg-slate-800/50 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <p class="font-bold text-slate-200">${r.repo_name}</p>
+                  <p class="text-[11px] text-slate-400">${calls} API calls</p>
+                </div>
+                <div class="text-right font-mono">
+                  <p class="font-bold text-amber-400">${tot.toLocaleString()} tok</p>
+                  <p class="text-[10px] text-slate-500">In: ${(r.input_tokens || 0).toLocaleString()} | Out: ${(r.output_tokens || 0).toLocaleString()}</p>
+                </div>
+              </div>
+            `;
+          });
+        }
+      }
+
+      // 3. Model Tokens
+      const modelStats = globalData.telemetry?.model_stats || {};
+      const mCont = document.getElementById('model-tokens-table');
+      if (mCont) {
+        mCont.innerHTML = '';
+        const modelList = Object.entries(modelStats);
+        if (modelList.length === 0) {
+          mCont.innerHTML = '<div class="p-3 text-center text-slate-500 font-mono">No model invocations recorded yet.</div>';
+        } else {
+          modelList.forEach(([mname, m]) => {
+            const tot = (m.input_tokens || 0) + (m.output_tokens || 0);
+            const calls = m.calls || m.invocations || 0;
+            mCont.innerHTML += `
+              <div class="p-3 rounded-lg bg-slate-800/50 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <p class="font-bold text-slate-200">${mname}</p>
+                  <p class="text-[11px] text-purple-400">${m.role || 'Agent'}</p>
+                </div>
+                <div class="text-right font-mono">
+                  <p class="font-bold text-indigo-400">${tot.toLocaleString()} tok</p>
+                  <p class="text-[10px] text-slate-500">${calls} calls</p>
+                </div>
+              </div>
+            `;
+          });
+        }
+      }
+
+      // 4. Recent Events Stream
+      const eventsCont = document.getElementById('telemetry-recent-events');
+      if (eventsCont) {
+        const events = globalData.telemetry?.recent_events || [];
+        if (events.length === 0) {
+          eventsCont.innerHTML = '<div class="text-slate-500">No events logged yet.</div>';
+        } else {
+          eventsCont.innerHTML = events.map(ev => {
+            const isError = ev.includes('❌') || ev.includes('FAILED') || ev.includes('Error');
+            const borderCol = isError ? 'border-red-500/80 bg-red-950/20 text-red-200' : 'border-indigo-500/40 text-slate-300';
+            return `
+              <div class="hover:bg-slate-900/50 px-2 py-1 rounded transition border-l-2 ${borderCol} font-mono text-[11px] leading-relaxed break-words mb-1">
+                ${ev}
+              </div>
+            `;
+          }).join('');
+        }
+      }
+    }
+
+    function renderAccounts() {
+      const accGrid = document.getElementById('accounts-grid');
+      accGrid.innerHTML = '';
+      (globalData.accounts || []).forEach((acc, idx) => {
+        accGrid.innerHTML += `
+          <div class="p-4 rounded-xl bg-slate-800/60 border border-slate-700/80 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-200 truncate w-32">${acc.email.split('@')[0]}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
+            </div>
+            <div>
+              <div class="flex justify-between text-[11px] mb-1 text-slate-400">
+                <span>5-Hour Quota</span>
+                <span class="font-mono text-emerald-400 font-bold">${acc.gemini_5h_percent}%</span>
+              </div>
+              <div class="w-full h-1.5 rounded-full bg-slate-700 overflow-hidden">
+                <div class="h-full bg-emerald-500 rounded-full" style="width: ${acc.gemini_5h_percent}%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between text-[11px] mb-1 text-slate-400">
+                <span>Weekly Quota</span>
+                <span class="font-mono text-indigo-400 font-bold">${acc.gemini_weekly_percent}%</span>
+              </div>
+              <div class="w-full h-1.5 rounded-full bg-slate-700 overflow-hidden">
+                <div class="h-full bg-indigo-500 rounded-full" style="width: ${acc.gemini_weekly_percent}%"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    function renderLinkedIn() {
+      document.getElementById('linkedin-content').innerText = globalData.linkedin_queue || "No drafts pending.";
+    }
+
+    let selectedBugfixTag = 'ALL';
+
+    function setBugfixFilter(tag) {
+      selectedBugfixTag = tag;
+      renderBugfixQueue();
+    }
+
+    function renderBugfixQueue() {
+      const ft = globalData.failed_tasks || { total_recorded_failures: 0, pending_bugfix_tasks: 0, resolved_bugfix_tasks: 0, failures: [] };
+      const failures = ft.failures || [];
+      const pendingCount = ft.pending_bugfix_tasks || 0;
+      const resolvedCount = ft.resolved_bugfix_tasks || 0;
+
+      const tabBadge = document.getElementById('failed-tasks-tab-badge');
+      if (tabBadge) {
+        tabBadge.innerText = pendingCount;
+        tabBadge.className = pendingCount > 0
+          ? 'px-1.5 py-0.5 rounded-full text-[10px] bg-rose-950 text-rose-400 border border-rose-800 font-mono inline-block'
+          : 'px-1.5 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-400 font-mono inline-block';
+      }
+
+      const elPending = document.getElementById('bugfix-pending-count');
+      if (elPending) elPending.innerText = `${pendingCount} Pending Fixes`;
+      const elResolved = document.getElementById('bugfix-resolved-count');
+      if (elResolved) elResolved.innerText = `${resolvedCount} Resolved`;
+
+      const allTags = new Set();
+      failures.forEach(f => (f.tags || []).forEach(t => allTags.add(t)));
+
+      const tagFilters = document.getElementById('bugfix-tag-filters');
+      if (tagFilters) {
+        let tagHtml = `<span class="text-xs text-slate-500 font-semibold uppercase mr-2"><i class="fa-solid fa-filter"></i> Filter Tags:</span>`;
+        tagHtml += `<button onclick="setBugfixFilter('ALL')" class="px-2.5 py-1 rounded-md text-xs font-mono font-semibold transition ${selectedBugfixTag === 'ALL' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}">All (${failures.length})</button>`;
+        Array.from(allTags).sort().forEach(tag => {
+          const count = failures.filter(f => (f.tags || []).includes(tag)).length;
+          const active = selectedBugfixTag === tag;
+          tagHtml += `<button onclick="setBugfixFilter('${tag}')" class="px-2.5 py-1 rounded-md text-xs font-mono transition ${active ? 'bg-rose-600 text-white' : 'bg-slate-800/80 text-rose-300 hover:bg-slate-700 border border-rose-900/40'}">#${tag} (${count})</button>`;
+        });
+        tagFilters.innerHTML = tagHtml;
+      }
+
+      const filtered = selectedBugfixTag === 'ALL' 
+        ? failures 
+        : failures.filter(f => (f.tags || []).includes(selectedBugfixTag));
+
+      const container = document.getElementById('bugfix-tasks-container');
+      if (!container) return;
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 font-mono text-xs bg-slate-950/40 rounded-lg border border-slate-800/60">No failed tasks matching filter '${selectedBugfixTag}'.</div>`;
+        return;
+      }
+
+      let html = '';
+      filtered.forEach((task) => {
+        const isResolved = task.status === 'resolved';
+        const tagsChips = (task.tags || []).map(t => `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-indigo-300 border border-slate-700">#${t}</span>`).join(' ');
+        const cardBorder = isResolved ? 'border-emerald-900/60 bg-emerald-950/20' : 'border-rose-900/60 bg-slate-900/70';
+        const statusBadge = isResolved 
+          ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">RESOLVED</span>`
+          : `<span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-950 text-rose-400 border border-rose-800">PENDING BUGFIX</span>`;
+
+        html += `
+          <div class="p-4 rounded-xl border ${cardBorder} transition hover:border-slate-600">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-xs font-bold text-amber-400 bg-slate-950 px-2.5 py-1 rounded border border-slate-800 select-all cursor-pointer" title="Click to copy ID" onclick="navigator.clipboard.writeText('${task.task_id}')">
+                  <i class="fa-solid fa-hashtag text-[10px] text-slate-500"></i> ${task.task_id}
+                </span>
+                <span class="text-xs font-semibold text-slate-300">[${task.repo_name || task.repo_id}]</span>
+                ${statusBadge}
+              </div>
+              <span class="text-[11px] font-mono text-slate-500">
+                <i class="fa-regular fa-clock"></i> ${task.last_failed_at || task.first_failed_at || 'Recently'} (Attempt ${task.attempts || 1})
+              </span>
+            </div>
+
+            <h4 class="text-sm font-bold text-slate-100 mb-1.5">${task.milestone_name}</h4>
+            
+            <div class="flex flex-wrap items-center gap-2 mb-3">
+              <span class="text-[11px] font-mono text-slate-400"><i class="fa-regular fa-file-code"></i> Target: <code class="text-slate-300">${task.target_file || '—'}</code></span>
+              <span class="text-slate-600">•</span>
+              <span class="text-[11px] font-mono text-rose-400 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> Type: ${task.failure_type || 'GENERAL'}</span>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-1.5 mb-3">
+              ${tagsChips}
+            </div>
+
+            <div class="mt-2">
+              <details class="group bg-slate-950 p-3 rounded-lg border border-slate-800">
+                <summary class="text-xs font-mono text-rose-300 cursor-pointer flex items-center justify-between select-none">
+                  <span><i class="fa-solid fa-terminal mr-1.5 text-slate-500"></i> View Error Reason & Trace (${task.failure_reason ? task.failure_reason.length : 0} chars)</span>
+                  <span class="text-[10px] text-slate-500 group-open:rotate-180 transition">▼</span>
+                </summary>
+                <pre class="mt-2 text-[11px] font-mono text-slate-300 whitespace-pre-wrap overflow-x-auto leading-relaxed border-t border-slate-800 pt-2">${task.failure_reason || 'No trace recorded.'}</pre>
+              </details>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    async function toggleMilestone(repoId, milestoneName, newStatus) {
+      await fetch('/api/milestone/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: repoId, milestone_name: milestoneName, new_status: newStatus })
+      });
+      fetchStatus();
+    }
+
+    function openAddGoalModal() {
+      document.getElementById('modal-add-goal').classList.remove('hidden');
+      const sel = document.getElementById('new-goal-repo');
+      const repos = globalData.repositories || [];
+      const optionsHtml = repos.map(r => `<option value="${r.id}">[P${r.priority}] ${r.name}</option>`).join('');
+      
+      const currentVal = sel.value;
+      const activeFilter = document.getElementById('repo-filter')?.value;
+
+      if (sel.innerHTML !== optionsHtml) {
+        sel.innerHTML = optionsHtml;
+      }
+
+      if (activeFilter && activeFilter !== 'all' && repos.some(r => r.id === activeFilter)) {
+        sel.value = activeFilter;
+      } else if (currentVal && repos.some(r => r.id === currentVal)) {
+        sel.value = currentVal;
+      }
+    }
+
+    function closeAddGoalModal() {
+      document.getElementById('modal-add-goal').classList.add('hidden');
+    }
+
+    async function openSteerModal() {
+      document.getElementById('modal-steer').classList.remove('hidden');
+      document.getElementById('steer-status').classList.add('hidden');
+
+      // Populate repositories dropdown if needed and preserve current selection
+      const sel = document.getElementById('steer-repo');
+      const repos = globalData.repositories || [];
+      const optionsHtml = repos.map(r => `<option value="${r.id}">[P${r.priority}] ${r.name}</option>`).join('');
+      
+      const currentVal = sel.value;
+      const activeFilter = document.getElementById('repo-filter')?.value;
+
+      if (sel.innerHTML !== optionsHtml) {
+        sel.innerHTML = optionsHtml;
+      }
+
+      // If a specific repository is currently active in the filter, select it; otherwise keep current selection
+      if (activeFilter && activeFilter !== 'all' && repos.some(r => r.id === activeFilter)) {
+        sel.value = activeFilter;
+      } else if (currentVal && repos.some(r => r.id === currentVal)) {
+        sel.value = currentVal;
+      }
+
+      updateSteerLimitFromRepo();
+
+      try {
+        const resp = await fetch('/api/models/rankings');
+        const list = await resp.json();
+        if (Array.isArray(list) && list.length > 0) {
+          const container = document.getElementById('steer-models-hierarchy');
+          container.innerHTML = list.slice(0, 4).map((m, idx) => {
+            const isLast = idx === Math.min(list.length, 4) - 1;
+            let badgeClass = "bg-purple-500/20 text-purple-300 border-purple-500/30";
+            if (m.color === 'indigo') badgeClass = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+            if (m.color === 'blue') badgeClass = "bg-blue-500/20 text-blue-300 border-blue-500/30";
+            if (m.color === 'teal') badgeClass = "bg-teal-500/20 text-teal-300 border-teal-500/30";
+            return `<span class="px-2 py-0.5 rounded border ${badgeClass}">#${m.rank} ${m.display_name}</span>` + (!isLast ? `<span class="text-slate-500">→</span>` : '');
+          }).join('');
+        }
+      } catch (e) {
+        console.error("Rankings fetch error:", e);
+      }
+    }
+
+    function updateSteerLimitFromRepo() {
+      const repoId = document.getElementById('steer-repo').value;
+      const repos = globalData.repositories || [];
+      const r = repos.find(x => x.id === repoId);
+      if (r) {
+        document.getElementById('steer-limit').value = r.milestone_cap || 3;
+      }
+    }
+
+    function closeSteerModal() {
+      document.getElementById('modal-steer').classList.add('hidden');
+    }
+
+    async function submitSteerPlanner() {
+      const repo = document.getElementById('steer-repo').value;
+      const intent = document.getElementById('steer-intent').value.trim();
+      const limit = parseInt(document.getElementById('steer-limit').value || '3');
+      if (!intent) {
+        alert("Please enter your steering direction / research intent.");
+        return;
+      }
+
+      const statusBox = document.getElementById('steer-status');
+      const btn = document.getElementById('btn-submit-steer');
+      statusBox.classList.remove('hidden');
+      btn.disabled = true;
+
+      let elapsedSec = 0;
+      statusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-purple-400"></i> Dispatching Strategic Planner for ${limit} milestones... <span class="font-mono text-purple-300 ml-1">(0s)</span>`;
+      
+      const timerInterval = setInterval(() => {
+        elapsedSec++;
+        let phase = 'Auditing repository tree & cross-referencing goals...';
+        if (elapsedSec > 15) phase = 'Formulating technical specifications & algorithmic bounds...';
+        if (elapsedSec > 35) phase = 'Cascading dynamic model tier & validating schema...';
+        if (elapsedSec > 60) phase = 'Finalizing JSON & syncing cards to GitHub Projects v2...';
+        statusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-purple-400"></i> ${phase} <span class="font-mono text-purple-300 ml-1">(${elapsedSec}s)</span>`;
+      }, 1000);
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute timeout
+
+        const resp = await fetch('/api/plan/steer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repo, steering_intent: intent, limit: limit }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        clearInterval(timerInterval);
+
+        const res = await resp.json();
+        if (res.status === 'success') {
+          statusBox.innerHTML = '✅ Formulated ' + res.created_count + ' milestones and pushed to GitHub Projects!';
+          setTimeout(() => {
+            closeSteerModal();
+            document.getElementById('steer-intent').value = '';
+            btn.disabled = false;
+            fetchStatus();
+          }, 1500);
+        } else {
+          statusBox.innerHTML = '❌ ' + (res.error || 'Failed to synthesize');
+          btn.disabled = false;
+        }
+      } catch (err) {
+        clearInterval(timerInterval);
+        statusBox.innerHTML = '❌ ' + (err.name === 'AbortError' ? 'Synthesis timed out after 3 minutes. Check Phoenix logs for details.' : ('Network error: ' + err.message));
+        btn.disabled = false;
+      }
+    }
+
+    async function syncGitHubProjects() {
+      const lbl = document.getElementById('gh-sync-label');
+      lbl.innerText = 'Syncing...';
+      try {
+        const resp = await fetch('/api/github/sync', { method: 'POST' });
+        const res = await resp.json();
+        lbl.innerText = 'Synced!';
+        setTimeout(() => { lbl.innerText = 'Sync GitHub'; }, 2000);
+        fetchStatus();
+      } catch (err) {
+        lbl.innerText = 'Error';
+        setTimeout(() => { lbl.innerText = 'Sync GitHub'; }, 2000);
+      }
+    }
+
+    let currentEditingCard = null;
+    let activeContextCardKey = null;
+
+    function showCardContextMenu(e, cardKey) {
+      activeContextCardKey = cardKey;
+      const menu = document.getElementById('card-context-menu');
+      const data = window.cardRegistry ? window.cardRegistry[cardKey] : null;
+      if (!data || !menu) return;
+
+      document.getElementById('ctx-card-title').innerText = data.m.name || 'Card Actions';
+
+      let x = e.clientX;
+      let y = e.clientY;
+      menu.classList.remove('hidden');
+      if (x + 230 > window.innerWidth) x = window.innerWidth - 240;
+      if (y + 160 > window.innerHeight) y = window.innerHeight - 170;
+      menu.style.left = `${x}px`;
+      menu.style.top = `${y}px`;
+    }
+
+    function hideCardContextMenu() {
+      const menu = document.getElementById('card-context-menu');
+      if (menu) menu.classList.add('hidden');
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#card-context-menu')) {
+        hideCardContextMenu();
+      }
+    });
+
+    function ctxActionEdit() {
+      hideCardContextMenu();
+      if (activeContextCardKey) openCardEditorByKey(activeContextCardKey);
+    }
+
+    function ctxActionToggle() {
+      hideCardContextMenu();
+      if (activeContextCardKey && window.cardRegistry) {
+        const data = window.cardRegistry[activeContextCardKey];
+        if (data) {
+          const nextStatus = data.m.status === 'completed' ? 'pending' : 'completed';
+          toggleMilestone(data.repo.id, data.m.name, nextStatus);
+        }
+      }
+    }
+
+    function ctxActionDelete() {
+      hideCardContextMenu();
+      if (activeContextCardKey && window.cardRegistry) {
+        const data = window.cardRegistry[activeContextCardKey];
+        if (data) {
+          openDeleteCardModal(data.repo.id, data.m.name);
+        }
+      }
+    }
+
+    function ctxActionToggleApproval() {
+      hideCardContextMenu();
+      if (activeContextCardKey && window.cardRegistry) {
+        const data = window.cardRegistry[activeContextCardKey];
+        if (data) {
+          toggleAutoApproval(data.repo.id, data.m.name);
+        }
+      }
+    }
+
+    async function toggleAutoApproval(repoId, milestoneName) {
+      try {
+        const res = await fetch('/api/card/toggle_approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId, name: milestoneName })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          await fetchStatus();
+        }
+      } catch (err) {
+        console.error('Error toggling auto approval:', err);
+      }
+    }
+
+    function openCardEditorByKey(cardKey) {
+      if (window.cardRegistry && window.cardRegistry[cardKey]) {
+        openCardEditor(window.cardRegistry[cardKey].repo, window.cardRegistry[cardKey].m);
+      }
+    }
+
+    function openCardEditor(repo, m) {
+      currentEditingCard = { repo, m };
+      document.getElementById('editor-repo-id').value = repo.id;
+      document.getElementById('editor-old-name').value = m.name;
+      document.getElementById('editor-title').value = m.name || '';
+      document.getElementById('editor-filepath').value = m.relative_filepath || '';
+      document.getElementById('editor-details').value = m.details || '';
+      document.getElementById('editor-ai-input').value = '';
+      document.getElementById('editor-arch-principle').value = '';
+      document.getElementById('editor-ai-feedback').classList.add('hidden');
+      
+      const badge = document.getElementById('editor-repo-badge');
+      badge.innerText = `[P${repo.priority}] ${repo.name}`;
+      
+      const st = m.status || 'pending';
+      const ghCol = (m.github_column || '').toLowerCase().trim();
+      let editorVal = 'pending';
+      if (st === 'completed' || ghCol === 'done') editorVal = 'completed';
+      else if (st === 'in_progress' || ghCol === 'in progress') editorVal = 'in_progress';
+      else if (st === 'in_review' || ghCol === 'in review') editorVal = 'in_review';
+      else if (st === 'backlog' || ghCol === 'backlog') editorVal = 'backlog';
+      else editorVal = 'pending';
+      document.getElementById('editor-status').value = editorVal;
+
+      // Git Provenance & Research Artifacts rendering
+      const provBox = document.getElementById('editor-provenance-box');
+      const branchSpan = document.getElementById('editor-git-branch');
+      const commitSpan = document.getElementById('editor-git-commit');
+      const completedSpan = document.getElementById('editor-completed-at');
+      const articlesContainer = document.getElementById('editor-articles-container');
+      const articlesList = document.getElementById('editor-articles-list');
+      const articlesCount = document.getElementById('editor-articles-count');
+
+      const hasGit = Boolean(m.commit_hash || m.branch || m.completed_at);
+      const articles = m.artifacts?.articles || [];
+
+      if (hasGit || articles.length > 0) {
+        provBox.classList.remove('hidden');
+        branchSpan.innerText = m.branch || repo.active_branch || 'feat/crowd-definition-mixed-crowd';
+        if (m.commit_url) {
+          commitSpan.innerHTML = `<a href="${m.commit_url}" target="_blank" class="hover:underline text-emerald-400 flex items-center gap-1">${m.commit_hash || 'HEAD'} <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i></a>`;
+        } else {
+          commitSpan.innerText = m.commit_hash || 'Local Working Tree';
+        }
+        completedSpan.innerText = m.completed_at ? `Delivered: ${m.completed_at}` : '';
+
+        if (articles.length > 0) {
+          articlesContainer.classList.remove('hidden');
+          articlesCount.innerText = `${articles.length} papers`;
+          articlesList.innerHTML = articles.map(p => `
+            <div class="p-2.5 rounded-lg bg-slate-950/80 border border-purple-500/20 text-xs space-y-1">
+              <div class="flex items-start justify-between gap-2">
+                <a href="${p.doi_or_url || '#'}" target="_blank" class="font-bold text-purple-200 hover:text-purple-100 hover:underline leading-tight flex-1">
+                  ${p.title} ${p.doi_or_url ? '<i class="fa-solid fa-arrow-up-right-from-square text-[9px] text-purple-400 ml-1"></i>' : ''}
+                </a>
+                <span class="text-[10px] font-mono text-purple-400 shrink-0 font-bold">${p.year || ''}</span>
+              </div>
+              <div class="text-[10px] text-slate-400 flex items-center gap-2 flex-wrap">
+                <span><i class="fa-solid fa-user-pen text-slate-500"></i> ${p.authors || 'Unknown'}</span>
+                <span>•</span>
+                <span><i class="fa-solid fa-building-columns text-slate-500"></i> ${p.venue || 'IEEE / arXiv'}</span>
+              </div>
+              ${p.summary ? `<p class="text-[10px] text-slate-400 leading-relaxed line-clamp-2">${p.summary}</p>` : ''}
+              ${(p.sensors_fused && p.sensors_fused.length) ? `
+                <div class="flex items-center gap-1 pt-0.5 flex-wrap">
+                  ${p.sensors_fused.map(s => `<span class="px-1.5 py-0.2 rounded bg-purple-900/40 border border-purple-500/30 text-[9px] font-mono text-purple-300">${s}</span>`).join('')}
+                </div>
+              ` : ''}
+            </div>
+          `).join('');
+        } else {
+          articlesContainer.classList.add('hidden');
+          articlesList.innerHTML = '';
+        }
+
+        // Hermes Skills rendering
+        const skillsContainer = document.getElementById('editor-skills-container');
+        const skillsList = document.getElementById('editor-skills-list');
+        const skills = (m.skills && m.skills.length >= 3) ? m.skills.slice(0, 3) : inferTaskSkills(m, repo);
+        if (skills && skills.length > 0) {
+          skillsContainer.classList.remove('hidden');
+          skillsList.innerHTML = skills.map(s => `
+            <span class="px-2 py-1 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 text-xs font-mono flex items-center gap-1.5 shadow-sm">
+              <i class="fa-solid fa-tag text-[9px] text-cyan-400"></i> ${s}
+            </span>
+          `).join('');
+        } else {
+          skillsContainer.classList.add('hidden');
+        }
+      } else {
+        provBox.classList.add('hidden');
+      }
+      
+      document.getElementById('modal-card-editor').classList.remove('hidden');
+    }
+
+    function closeCardEditor() {
+      document.getElementById('modal-card-editor').classList.add('hidden');
+      currentEditingCard = null;
+    }
+
+    async function runCardAIRefine() {
+      const userInput = document.getElementById('editor-ai-input').value.trim();
+      if (!userInput) {
+        alert("Please write or dictate your rough thoughts / instructions in the box.");
+        return;
+      }
+
+      const btn = document.getElementById('btn-card-refine');
+      const feedback = document.getElementById('editor-ai-feedback');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Polishing Specs...';
+      feedback.classList.remove('hidden');
+      feedback.innerText = "✨ AI is analyzing equations & technical criteria...";
+
+      const repoId = document.getElementById('editor-repo-id').value;
+      const title = document.getElementById('editor-title').value;
+      const details = document.getElementById('editor-details').value;
+      const filepath = document.getElementById('editor-filepath').value;
+      const repoName = currentEditingCard?.repo?.name || 'General';
+
+      try {
+        const resp = await fetch('/api/card/ai_refine', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repoId,
+            repo_name: repoName,
+            title: title,
+            details: details,
+            relative_filepath: filepath,
+            user_input: userInput
+          })
+        });
+        const data = await resp.json();
+        if (data.title) document.getElementById('editor-title').value = data.title;
+        if (data.details) document.getElementById('editor-details').value = data.details;
+        if (data.relative_filepath) document.getElementById('editor-filepath').value = data.relative_filepath;
+        if (data.architectural_principle) {
+          document.getElementById('editor-arch-principle').value = data.architectural_principle;
+          feedback.innerHTML = `✅ Formulated! Principle: <em>"${data.architectural_principle.slice(0, 70)}..."</em>`;
+        }
+      } catch (err) {
+        feedback.innerText = "❌ Refinement error: " + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-sparkles"></i> AI Polish & Formulate Technical Specs';
+      }
+    }
+
+    async function saveCardEditor() {
+      const repoId = document.getElementById('editor-repo-id').value;
+      const oldName = document.getElementById('editor-old-name').value;
+      const newTitle = document.getElementById('editor-title').value.trim();
+      const newDetails = document.getElementById('editor-details').value.trim();
+      const newFilepath = document.getElementById('editor-filepath').value.trim();
+      const newStatus = document.getElementById('editor-status').value;
+      const userSpeech = document.getElementById('editor-ai-input').value.trim();
+      const archPrinciple = document.getElementById('editor-arch-principle').value.trim();
+
+      if (!newTitle) {
+        alert("Milestone title cannot be empty.");
+        return;
+      }
+
+      const btn = document.getElementById('btn-card-save');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving & Syncing to GitHub...';
+
+      try {
+        const resp = await fetch('/api/card/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repoId,
+            old_name: oldName,
+            name: newTitle,
+            details: newDetails,
+            relative_filepath: newFilepath,
+            status: newStatus,
+            user_speech: userSpeech,
+            architectural_principle: archPrinciple
+          })
+        });
+        const res = await resp.json();
+        if (res.status === 'success') {
+          closeCardEditor();
+          fetchStatus();
+        } else {
+          alert("Card save failed.");
+        }
+      } catch (err) {
+        alert("Network error: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save & Sync to GitHub Projects';
+      }
+    }
+
+    function deleteCardEditor() {
+      const repoId = document.getElementById('editor-repo-id').value;
+      const oldName = document.getElementById('editor-old-name').value;
+      openDeleteCardModal(repoId, oldName);
+    }
+
+    function openDeleteCardModal(repoId, milestoneName) {
+      document.getElementById('delete-card-repo-id').value = repoId;
+      document.getElementById('delete-card-milestone-name').value = milestoneName;
+      document.getElementById('delete-card-target-name').innerText = milestoneName;
+      document.getElementById('delete-card-blacklist-check').checked = false;
+      document.getElementById('modal-delete-card').classList.remove('hidden');
+    }
+
+    function closeDeleteCardModal() {
+      document.getElementById('modal-delete-card').classList.add('hidden');
+    }
+
+    async function executeDeleteCard() {
+      const repoId = document.getElementById('delete-card-repo-id').value;
+      const mName = document.getElementById('delete-card-milestone-name').value;
+      const isBlacklist = document.getElementById('delete-card-blacklist-check').checked;
+      const btn = document.getElementById('btn-confirm-delete-card');
+
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Deleting...';
+
+      try {
+        const resp = await fetch('/api/card/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId, milestone_name: mName, blacklist: isBlacklist })
+        });
+        const res = await resp.json();
+        if (res.status === 'success') {
+          closeDeleteCardModal();
+          closeCardEditor();
+          fetchStatus();
+        } else {
+          alert("Card deletion failed: " + (res.error || "Not found"));
+        }
+      } catch (err) {
+        alert("Network error: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-trash"></i> Confirm Delete';
+      }
+    }
+
+    async function submitNewGoal() {
+      const repo = document.getElementById('new-goal-repo').value;
+      const title = document.getElementById('new-goal-title').value;
+      const details = document.getElementById('new-goal-details').value;
+      if (!title) return;
+
+      await fetch('/api/milestone/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: repo, name: title, details: details })
+      });
+      closeAddGoalModal();
+      document.getElementById('new-goal-title').value = '';
+      document.getElementById('new-goal-details').value = '';
+      fetchStatus();
+    }
+
+    async function triggerOrchestrator() {
+      await fetch('/api/trigger_orchestrator', { method: 'POST' });
+      alert("🚀 Orchestrator triggered! High-priority pending tasks are now executing.");
+      fetchStatus();
+    }
+
+    function copyLinkedInPost() {
+      const text = document.getElementById('linkedin-content').innerText;
+      navigator.clipboard.writeText(text);
+      alert("📋 LinkedIn draft copied to clipboard!");
+    }
+
+    function toggleTraceDetail(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden');
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    async function clearActiveAgents() {
+      try {
+        await fetch('/api/telemetry/clear_agents', { method: 'POST' });
+        fetchStatus();
+      } catch (e) {
+        console.error('Error clearing agents:', e);
+      }
+    }
+
+    window.availableModels = [];
+    async function fetchModels() {
+      try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+        if (data.models && Array.isArray(data.models) && data.models.length > 0) {
+          window.availableModels = data.models;
+          window.activeLLMServer = data.server_url;
+          populateAddRepoModelSelects();
+        }
+      } catch (err) {
+        console.error("Error fetching live LLM server models:", err);
+      }
+    }
+
+    function buildModelOptions(currentVal, defaultLabel, includeAuto = true) {
+      let html = '';
+      if (includeAuto) {
+        html += `<option value="auto">🌟 ${defaultLabel}</option>`;
+      }
+      const models = window.availableModels || [];
+      models.forEach(m => {
+        const isSel = (currentVal === m.id) ? 'selected' : '';
+        const thinking = m.supports_thinking ? ' 🧠' : '';
+        html += `<option value="${m.id}" ${isSel}>${m.name}${thinking} (${m.id})</option>`;
+      });
+      return html;
+    }
+
+    function populateAddRepoModelSelects() {
+      const pSel = document.getElementById('add-repo-planner-model');
+      const eSel = document.getElementById('add-repo-executor-model');
+      if (pSel) pSel.innerHTML = buildModelOptions(null, 'Dynamic Waterfall (Auto)', true);
+      if (eSel) eSel.innerHTML = buildModelOptions(null, 'Default (gemini-3.8-flash-tiered)', true);
+    }
+
+    async function setPlannerMode(repoId, mode) {
+      if (document.activeElement) {
+        document.activeElement.blur();
+      }
+      window.isUserInteractingWithRepos = false;
+
+      let targetModel = null;
+      if (mode === 'waterfall') {
+        targetModel = 'auto';
+      } else {
+        const repo = (globalData.repositories || []).find(r => r.id === repoId || r.name === repoId);
+        if (repo && repo.planner_model && repo.planner_model !== 'auto') {
+          targetModel = repo.planner_model;
+        } else {
+          const models = window.availableModels || [];
+          const opusModel = models.find(m => m.id.includes('opus'))?.id;
+          targetModel = opusModel || models[0]?.id || 'claude-opus-4-6-thinking';
+        }
+      }
+
+      const eSel = document.getElementById(`executor-model-${repoId}`);
+      const currExec = eSel ? eSel.value : 'auto';
+
+      // Optimistic instant local update
+      const targetRepo = (globalData.repositories || []).find(r => r.id === repoId || r.name === repoId);
+      if (targetRepo) {
+        targetRepo.planner_model = (targetModel === 'auto' ? null : targetModel);
+        renderRepos();
+      }
+
+      try {
+        await fetch('/api/repo/update_models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repoId,
+            planner_model: targetModel,
+            executor_model: currExec
+          })
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Error setting planner mode:", err);
+      }
+    }
+
+    async function updateRepoModels(repoId) {
+      const pSel = document.getElementById(`planner-model-${repoId}`);
+      const eSel = document.getElementById(`executor-model-${repoId}`);
+      const pVal = pSel ? pSel.value : undefined;
+      const eVal = eSel ? eSel.value : undefined;
+      try {
+        await fetch('/api/repo/update_models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repoId,
+            planner_model: pVal,
+            executor_model: eVal
+          })
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Error updating repo models:", err);
+      }
+    }
+
+    // --- REPO MANAGEMENT FUNCTIONS ---
+    function openAddRepoModal() {
+      document.getElementById('modal-add-repo').classList.remove('hidden');
+      document.getElementById('add-repo-name').value = '';
+      document.getElementById('add-repo-path').value = '';
+      document.getElementById('add-repo-status').classList.add('hidden');
+      populateAddRepoModelSelects();
+    }
+
+    function closeAddRepoModal() {
+      document.getElementById('modal-add-repo').classList.add('hidden');
+    }
+
+    async function submitAddRepo() {
+      const name = document.getElementById('add-repo-name').value.trim();
+      const path = document.getElementById('add-repo-path').value.trim();
+      const cat = document.getElementById('add-repo-category').value;
+      const prio = parseInt(document.getElementById('add-repo-priority').value || '2');
+      const autoMode = document.getElementById('add-repo-auto').checked;
+      const plannerModel = document.getElementById('add-repo-planner-model')?.value || 'auto';
+      const executorModel = document.getElementById('add-repo-executor-model')?.value || 'auto';
+      const budget = parseInt(document.getElementById('add-repo-budget').value || '60000');
+
+      if (!name || !path) {
+        alert("Please enter both repository name and GitHub URL or local path.");
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit-add-repo');
+      const statusBox = document.getElementById('add-repo-status');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
+      statusBox.classList.remove('hidden');
+      statusBox.innerText = "Cloning / registering repository...";
+
+      try {
+        const resp = await fetch('/api/repo/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            path: path,
+            category: cat,
+            priority: prio,
+            auto_planning: autoMode,
+            planner_model: plannerModel,
+            executor_model: executorModel,
+            daily_token_budget_est: budget
+          })
+        });
+        const res = await resp.json();
+        if (res.status === 'success' || res.status === 'exists') {
+          statusBox.innerText = "✅ Repository registered successfully!";
+          setTimeout(() => {
+            closeAddRepoModal();
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-plus"></i> Connect & Track';
+            fetchStatus();
+          }, 1000);
+        } else {
+          statusBox.innerText = "❌ " + (res.error || "Failed to add repo");
+          btn.disabled = false;
+        }
+      } catch (err) {
+        statusBox.innerText = "❌ Network error: " + err.message;
+        btn.disabled = false;
+      }
+    }
+
+    async function deleteRepo(repoId, repoName) {
+      if (!confirm(`Are you sure you want to remove '${repoName}'? All associated tasks will be deleted.`)) {
+        return;
+      }
+      try {
+        const resp = await fetch('/api/repo/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId })
+        });
+        const res = await resp.json();
+        if (res.status === 'success') {
+          fetchStatus();
+        } else {
+          alert("Failed to remove repo.");
+        }
+      } catch (err) {
+        alert("Network error: " + err.message);
+      }
+    }
+
+    async function toggleRepoAuto(repoId) {
+      try {
+        const resp = await fetch('/api/repo/toggle_auto', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId })
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Toggle error:", err);
+      }
+    }
+
+    async function toggleRepoAutoApprove(repoId) {
+      try {
+        const resp = await fetch('/api/repo/toggle_auto_approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId })
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Toggle auto-approve error:", err);
+      }
+    }
+
+    async function toggleAllAutoApprove() {
+      try {
+        const resp = await fetch('/api/repo/toggle_all_auto_approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Toggle all auto-approve error:", err);
+      }
+    }
+
+    async function adjustRepoCap(repoId, delta) {
+      const el = document.getElementById(`cap-val-${repoId}`);
+      let curr = parseInt(el?.innerText || '3');
+      let next = Math.max(1, Math.min(10, curr + delta));
+      if (next === curr) return;
+      if (el) el.innerText = next;
+      try {
+        await fetch('/api/repo/update_cap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo_id: repoId, milestone_cap: next })
+        });
+        fetchStatus();
+      } catch (err) {
+        console.error("Cap update error:", err);
+      }
+    }
+
+    function openAddGoalForRepo(repoId) {
+      openAddGoalModal();
+      const sel = document.getElementById('new-goal-repo');
+      if (sel) sel.value = repoId;
+    }
+
+    // --- STEERING MEMORY FUNCTIONS ---
+    async function openSteeringHistoryModal() {
+      document.getElementById('modal-steering-memory').classList.remove('hidden');
+      const container = document.getElementById('steering-history-content');
+      container.innerHTML = '<div class="text-slate-400 py-4 text-center"><i class="fa-solid fa-spinner fa-spin"></i> Loading steering memory...</div>';
+      try {
+        const resp = await fetch('/api/steering/history');
+        const hist = await resp.json();
+        let html = '';
+
+        // 1. Principles
+        const summaries = hist.repo_summaries || {};
+        html += '<div class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">';
+        html += '<h4 class="font-bold text-amber-300 font-sans flex items-center gap-1.5"><i class="fa-solid fa-compass"></i> Established Human Architectural Principles:</h4>';
+        if (Object.keys(summaries).length === 0) {
+          html += '<p class="text-slate-500 font-sans text-[11px]">No custom principles recorded yet. Edit any card to add guidance.</p>';
+        } else {
+          for (const [repo, items] of Object.entries(summaries)) {
+            html += `<div class="pt-1"><span class="text-indigo-400 font-bold uppercase text-[10px] font-sans">[${repo}]:</span><ul class="list-disc list-inside text-slate-300 text-[11px] font-sans space-y-0.5 mt-0.5">`;
+            items.forEach(p => { html += `<li>${p}</li>`; });
+            html += `</ul></div>`;
+          }
+        }
+        html += '</div>';
+
+        // 2. Blacklisted Topics
+        const blacklists = hist.repo_blacklists || {};
+        const hasBlacklists = Object.values(blacklists).some(b => b.length > 0);
+        html += '<div class="p-4 rounded-xl bg-red-950/20 border border-red-500/30 space-y-2">';
+        html += '<h4 class="font-bold text-red-400 font-sans flex items-center gap-1.5"><i class="fa-solid fa-ban"></i> Forbidden Topics / Negative Constraints (Blacklist):</h4>';
+        if (!hasBlacklists) {
+          html += '<p class="text-slate-500 font-sans text-[11px]">No milestones deleted yet.</p>';
+        } else {
+          for (const [repo, items] of Object.entries(blacklists)) {
+            if (items.length > 0) {
+              html += `<div class="pt-1"><span class="text-red-300 font-bold uppercase text-[10px] font-sans">[${repo}]:</span><ul class="list-disc list-inside text-slate-400 text-[11px] font-sans space-y-0.5 mt-0.5">`;
+              items.forEach(b => { html += `<li>❌ ${b}</li>`; });
+              html += `</ul></div>`;
+            }
+          }
+        }
+        html += '</div>';
+
+        // 3. Recent Edits
+        const edits = hist.edits || [];
+        html += '<div class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">';
+        html += '<h4 class="font-bold text-indigo-300 font-sans flex items-center gap-1.5"><i class="fa-solid fa-clock-rotate-left"></i> Recent Human Interventions:</h4>';
+        if (edits.length === 0) {
+          html += '<p class="text-slate-500 font-sans text-[11px]">No edits logged yet.</p>';
+        } else {
+          edits.slice(-5).reverse().forEach(e => {
+            html += `<div class="border-b border-slate-800/80 pb-2 text-[11px] font-sans text-slate-300">
+              <span class="text-slate-500 text-[10px] font-mono">${e.timestamp}</span> [${e.repo_id}] <strong>${e.milestone_new_name}</strong>
+              <div class="text-purple-300 text-[10px] mt-0.5 italic">"${e.user_raw_notes}"</div>
+            </div>`;
+          });
+        }
+        html += '</div>';
+
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = '<div class="text-red-400">Error loading history: ' + err.message + '</div>';
+      }
+    }
+
+    function closeSteeringHistoryModal() {
+      document.getElementById('modal-steering-memory').classList.add('hidden');
+    }
+
+    // Initialize and gentle auto-poll every 3s
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+  </script>
+</body>
+</html>

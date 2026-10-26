@@ -1,0 +1,13 @@
+# Core Dependencies
+requests>=2.31.0
+psutil>=5.9.0
+pillow>=10.0.0
+
+# OpenTelemetry & Arize Phoenix Observability
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+openinference-semantic-conventions>=0.1.0
+arize-phoenix>=4.0.0
+
+# Optional: Hermes Agent CLI & AI Runtime
+# Install via: pip install hermes-agent (or https://github.com/nousresearch/hermes-agent)
