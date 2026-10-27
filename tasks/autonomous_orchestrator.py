@@ -544,12 +544,14 @@ def run_planner_pass(repos: list) -> bool:
         repo_name = repo.get("name", "Unknown")
         repo_path = Path(repo["path"])
         milestones = repo.get("milestones", [])
-        # Genuine active uncompleted tasks in the pipeline (pending, todo, ready, backlog, in_progress, etc.)
-        active_pending = [m for m in milestones if m.get("status") != "completed"]
-        pending = active_pending
+        # Continuous 3-Task Queue Buffer: Count unexecuted tasks waiting in queue (pending, todo, ready, backlog).
+        # Any task claimed by an executor (moved to 'in_progress') or finished frees a slot in the queue,
+        # so as soon as even ONE task leaves the 3-task queue, the planner synthesizes to refill it!
+        queued_waiting = [m for m in milestones if m.get("status") in ("pending", "todo", "ready", "backlog")]
+        pending = queued_waiting
         
         print(f"[*] Auditing Repo: {repo_name} (Priority {repo.get('priority', 99)})")
-        print(f"    Total Milestones: {len(milestones)} | Active/Uncompleted: {len(active_pending)}")
+        print(f"    Total Milestones: {len(milestones)} | Queued Waiting Buffer: {len(queued_waiting)}")
         
         # Check if repo has autonomous planning enabled (dynamically re-check disk state)
         is_auto_planning = repo.get("auto_planning", True)
@@ -572,14 +574,14 @@ def run_planner_pass(repos: list) -> bool:
 
         target_cap = int(repo.get("milestone_cap", 3))
         
-        if len(active_pending) >= target_cap:
-            print(f"    [BUFFER FULL] '{repo_name}' has {len(active_pending)} active pending milestones (cap: {target_cap}).")
+        if len(queued_waiting) >= target_cap:
+            print(f"    [BUFFER FULL] '{repo_name}' has {len(queued_waiting)} waiting queued milestones (cap: {target_cap}).")
             continue
 
-        missing = target_cap - len(active_pending)
+        missing = target_cap - len(queued_waiting)
 
-        # Continuous Buffer Replenishment: As soon as pending < cap,
-        # the Strategic Planner synthesizes the missing milestones to keep the pipeline full!
+        # Continuous Buffer Replenishment: As soon as queued_waiting < cap (even by 1 task!),
+        # the Strategic Planner synthesizes the missing milestones to keep the pipeline buffer full!
         if missing > 0:
             agent_id = f"planner_opus_{repo_id}"
             task_desc = f"Replenish {missing} milestone(s) for {repo_name} (Buffer: {len(pending)}/{target_cap})"
@@ -1150,7 +1152,16 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
     task_desc = f"Implementing '{milestone_name}' ({target_rel})"
     hermes_session_id = None
     
-    telemetry.register_agent(agent_id, repo_id, repo_name, "Hermes Task Executor", EXECUTOR_MODEL, task_desc)
+    # Mark in-progress atomically in repositories.json and disk immediately
+    with repos_lock:
+        target_milestone["status"] = "in_progress"
+        target_milestone["github_column"] = "In progress"
+        save_repositories(repos)
+
+    telemetry.register_agent(
+        agent_id, repo_id, repo_name, "Hermes Task Executor", EXECUTOR_MODEL, task_desc,
+        milestone_name=milestone_name
+    )
     sync_dashboards()
     
     # Live sync card to 'In progress' column on GitHub Projects v2

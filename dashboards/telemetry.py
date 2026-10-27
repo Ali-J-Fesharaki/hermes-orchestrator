@@ -62,7 +62,7 @@ def save_telemetry(data: dict):
             if tmp.exists():
                 tmp.unlink(missing_ok=True)
 
-def register_agent(agent_id: str, repo_id: str, repo_name: str, role: str, model: str, task: str, hermes_session_id: str | None = None):
+def register_agent(agent_id: str, repo_id: str, repo_name: str, role: str, model: str, task: str, hermes_session_id: str | None = None, milestone_name: str | None = None):
     """Registers an active running agent in the live concurrency registry."""
     data = load_telemetry()
     data["active_agents"][agent_id] = {
@@ -72,6 +72,7 @@ def register_agent(agent_id: str, repo_id: str, repo_name: str, role: str, model
         "role": role,
         "model": model,
         "current_task": task,
+        "milestone_name": milestone_name,
         "hermes_session_id": hermes_session_id,
         "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "start_ts": time.time()

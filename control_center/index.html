@@ -1404,13 +1404,48 @@
 
       let cBacklog = 0, cReady = 0, cInprog = 0, cInreview = 0, cDone = 0;
 
-      const workingTasks = Object.values(globalData.telemetry?.active_agents || {}).map(a => a.current_task);
+      const activeAgentsList = Object.values(globalData.telemetry?.active_agents || {});
+      const workingTasks = activeAgentsList.map(a => a.current_task || '');
+      const workingMilestones = new Set(activeAgentsList.map(a => (a.milestone_name || '').trim().toLowerCase()).filter(Boolean));
+
+      // Render active Strategic Planner / Recovery Planner thinking cards in In Progress
+      activeAgentsList.forEach(a => {
+        const role = a.role || '';
+        if (role.toLowerCase().includes('planner') || !a.milestone_name) {
+          if (filter !== 'all' && a.repo_id && a.repo_id !== filter) return;
+          
+          cInprog++;
+          const plannerCard = document.createElement('div');
+          plannerCard.className = 'card-kanban p-3.5 rounded-xl border border-purple-500/50 bg-purple-950/30 text-xs space-y-2 shadow-sm animate-pulse';
+          const elapsed = Math.max(1, Math.floor(Date.now() / 1000 - (a.start_ts || (Date.now() / 1000))));
+          plannerCard.innerHTML = `
+            <div class="flex items-center justify-between">
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border border-purple-500/40 bg-purple-500/20 text-purple-300">
+                <i class="fa-solid fa-brain text-purple-400"></i> ${role}
+              </span>
+              <span class="px-2 py-0.5 rounded text-[10px] font-mono text-purple-300 border border-purple-500/30 bg-purple-950/60">
+                ${a.model || 'Claude Opus'}
+              </span>
+            </div>
+            <p class="font-bold text-purple-100 text-xs leading-snug">${a.current_task || 'Synthesizing architectural milestones...'}</p>
+            <div class="pt-1.5 border-t border-purple-500/30 flex items-center justify-between text-[10px] text-purple-300 font-mono">
+              <span class="flex items-center gap-1"><i class="fa-solid fa-spinner fa-spin text-purple-400"></i> Active Reasoning (${elapsed}s)</span>
+              <span>${a.hermes_session_id ? `Session: ${a.hermes_session_id.slice(0, 10)}...` : ''}</span>
+            </div>
+          `;
+          colInprog.appendChild(plannerCard);
+        }
+      });
 
       (globalData.repositories || []).forEach(repo => {
         if (filter !== 'all' && repo.id !== filter) return;
 
         (repo.milestones || []).forEach(m => {
-          const isWorking = workingTasks.some(wt => wt.includes(m.name));
+          const mNameClean = (m.name || '').trim().toLowerCase();
+          const isWorking = (m.status === 'in_progress') || 
+                            workingMilestones.has(mNameClean) || 
+                            workingTasks.some(wt => wt.toLowerCase().includes(mNameClean));
+
           let col = 'backlog';
           const ghCol = (m.github_column || '').toLowerCase().trim();
           const isRepoAutoApprove = Boolean(repo.auto_approve_plans);
@@ -1426,11 +1461,11 @@
             col = 'done';
           } else if (m.status === 'in_review' || ghCol === 'in review') {
             col = 'inreview';
-          } else if (isWorking) {
+          } else if (isWorking || m.status === 'in_progress' || ghCol === 'in progress') {
             col = 'inprogress';
           } else if (isBlockedByDep) {
             col = 'backlog';
-          } else if (m.status === 'ready' || ghCol === 'ready' || (m.status === 'in_progress' && isApproved)) {
+          } else if (m.status === 'ready' || ghCol === 'ready') {
             col = 'ready';
           } else if (m.status === 'pending' || m.status === 'todo') {
             col = isApproved ? 'ready' : (ghCol === 'backlog' ? 'backlog' : 'ready');
