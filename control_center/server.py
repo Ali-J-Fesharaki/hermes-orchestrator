@@ -99,8 +99,22 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_orchestrator_status()
         elif parsed.path == "/api/failed_tasks":
             self.handle_failed_tasks()
+        elif parsed.path == "/api/fleet_health":
+            self.handle_fleet_health()
         else:
             super().do_GET()
+
+    def handle_fleet_health(self):
+        try:
+            from fleet_health_sentinel import get_fleet_health_snapshot
+            data = get_fleet_health_snapshot(run_smoke_test=False)
+        except Exception as e:
+            data = {"overall_status": "ERROR", "error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_failed_tasks(self):
         failed_tasks_file = DASH_DIR / "failed_tasks_registry.json"
@@ -207,8 +221,22 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_update_repo_cap(payload)
         elif parsed.path == "/api/telemetry/clear_agents":
             self.handle_clear_agents()
+        elif parsed.path == "/api/fleet/smoke_test":
+            self.handle_fleet_smoke_test()
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_fleet_smoke_test(self):
+        try:
+            from fleet_health_sentinel import probe_hermes_agent_smoke_test
+            data = probe_hermes_agent_smoke_test(force=True)
+        except Exception as e:
+            data = {"agent_smoke_test": "ERROR", "error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_clear_agents(self):
         try:
@@ -1227,6 +1255,14 @@ def get_system_snapshot():
         except Exception:
             pass
 
+    # 12. Fleet Health Sentinel (Real Hermes Smoke Test & Token Readiness)
+    fleet_health = {}
+    try:
+        from fleet_health_sentinel import get_fleet_health_snapshot
+        fleet_health = get_fleet_health_snapshot(run_smoke_test=False)
+    except Exception:
+        pass
+
     return {
         "telemetry": telemetry,
         "repositories": repos,
@@ -1239,6 +1275,7 @@ def get_system_snapshot():
         "router_status": router_info.get("status", "offline"),
         "router_models_count": router_info.get("models_count", 0),
         "router_checked_at": router_info.get("checked_at", ""),
+        "fleet_health": fleet_health,
         "quota_optimizer": quota_optimizer,
         "rate_governor": rate_governor,
         "failed_tasks": failed_tasks,

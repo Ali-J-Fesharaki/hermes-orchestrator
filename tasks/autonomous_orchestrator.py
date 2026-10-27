@@ -886,7 +886,7 @@ def invoke_recovery_planner(system_prompt: str, user_prompt: str, repo_id: str, 
                 repo_name=repo_name,
                 role=f"Hermes Recovery Planner ({mlabel})",
                 workdir=workdir,
-                timeout_s=360
+                timeout_s=720
             )
             if resp and resp.strip():
                 minfo["color"] = "amber"

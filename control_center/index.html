@@ -965,20 +965,28 @@
       const tot = globalData.telemetry?.totals?.total_tokens || 0;
       document.getElementById('total-tokens').innerText = `${tot.toLocaleString()} Tokens Burned`;
 
-      // Update Live LLM Router status badge
+      // Update Live LLM Router / Fleet Health status badge
       const routerBadge = document.getElementById('badge-router');
       const routerDot = document.getElementById('router-pulse-dot');
       const routerText = document.getElementById('router-status-text');
       if (routerBadge && routerDot && routerText) {
+        const fh = globalData.fleet_health || {};
         const isOnline = globalData.router_status === 'online';
         const port = globalData.router_port || 8045;
         const count = globalData.router_models_count || 0;
-        if (isOnline) {
-          routerBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium";
+        const smoke = fh.smoke_test || {};
+        const smokePassed = (smoke.agent_smoke_test === 'PASSED');
+
+        if (isOnline && smokePassed) {
+          routerBadge.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:border-emerald-400/50 transition";
+          routerDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          routerText.innerText = `Fleet: 100% Verified (:8045 | ${count} Models)`;
+        } else if (isOnline) {
+          routerBadge.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:border-emerald-400/50 transition";
           routerDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
           routerText.innerText = `Router :${port} Online (${count} Models)`;
         } else {
-          routerBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium";
+          routerBadge.className = "cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium hover:border-rose-400/50 transition";
           routerDot.className = "w-2 h-2 rounded-full bg-rose-500";
           routerText.innerText = `Router :${port} Offline`;
         }
@@ -1105,6 +1113,99 @@
 
     function closeQuotaOptimizerModal() {
       document.getElementById('modal-quota-optimizer').classList.add('hidden');
+    }
+
+    function openFleetHealthModal() {
+      const modal = document.getElementById('modal-fleet-health');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+
+      const fh = globalData.fleet_health || {};
+      const gw = fh.gateway || {};
+      const acc = fh.accounts || {};
+      const smoke = fh.smoke_test || {};
+
+      // 1. Gateway
+      const gwStatus = document.getElementById('fleet-gw-status');
+      const gwDetails = document.getElementById('fleet-gw-details');
+      const gwModels = document.getElementById('fleet-gw-models');
+      if (gw.gateway_online) {
+        gwStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300";
+        gwStatus.innerText = "ONLINE";
+        gwDetails.innerText = `Port :${gw.port || 8045}`;
+        gwModels.innerText = `${gw.models_count || 0} Models available`;
+      } else {
+        gwStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400";
+        gwStatus.innerText = "OFFLINE";
+        gwDetails.innerText = `Port :${gw.port || 8045}`;
+        gwModels.innerText = "Router disconnected";
+      }
+
+      // 2. Accounts
+      const accStatus = document.getElementById('fleet-acc-status');
+      const accDetails = document.getElementById('fleet-acc-details');
+      if (acc.accounts_healthy) {
+        accStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300";
+        accStatus.innerText = `${acc.active_count || 0} HEALTHY`;
+        accDetails.innerText = `${acc.quarantined_count || 0} Quarantined`;
+      } else {
+        accStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300";
+        accStatus.innerText = "DEGRADED";
+        accDetails.innerText = `${acc.quarantined_count || 0} Quarantined / Captcha`;
+      }
+
+      // 3. Smoke Test
+      const smokeStatus = document.getElementById('fleet-smoke-status');
+      const smokeDetails = document.getElementById('fleet-smoke-details');
+      const probeBox = document.getElementById('fleet-probe-box');
+      const probeTime = document.getElementById('fleet-probe-time');
+
+      if (smoke.agent_smoke_test === 'PASSED') {
+        smokeStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300";
+        smokeStatus.innerText = "PASSED";
+        smokeDetails.innerText = `${smoke.output || 'PONG'} (${smoke.latency_s}s)`;
+      } else if (smoke.agent_smoke_test) {
+        smokeStatus.className = "px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300";
+        smokeStatus.innerText = smoke.agent_smoke_test;
+        smokeDetails.innerText = smoke.error || 'Failed';
+      }
+
+      probeTime.innerText = smoke.tested_at ? `Last tested: ${smoke.tested_at}` : '';
+      probeBox.innerHTML = `Model: <span class="text-indigo-400">${smoke.model_tested || 'gemini-3.8-flash-tiered'}</span>\n` +
+        `Latency: <span class="text-teal-400">${smoke.latency_s || 0}s</span>\n` +
+        `Exit Code: <span class="${smoke.exit_code === 0 ? 'text-emerald-400' : 'text-rose-400'}">${smoke.exit_code ?? 'N/A'}</span>\n` +
+        `Response: <span class="text-slate-100 font-bold">${smoke.output || '(No response)'}</span>\n` +
+        (smoke.error ? `Error: <span class="text-rose-400">${smoke.error}</span>\n` : '') +
+        `Gateway: http://127.0.0.1:${gw.port || 8045}/v1`;
+    }
+
+    function closeFleetHealthModal() {
+      document.getElementById('modal-fleet-health').classList.add('hidden');
+    }
+
+    async function runFleetSmokeTest() {
+      const btn = document.getElementById('btn-run-smoke-test');
+      const probeBox = document.getElementById('fleet-probe-box');
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Testing Hermes Agent...</span>`;
+      probeBox.innerText = "Executing live 1-shot Hermes Agent subprocess ('hermes -z \"Respond strictly with: PONG\"')... Please wait...";
+
+      try {
+        const resp = await fetch('/api/fleet/smoke_test', { method: 'POST' });
+        const data = await resp.json();
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>Run Smoke Test Now</span>`;
+
+        if (globalData.fleet_health) {
+          globalData.fleet_health.smoke_test = data;
+        }
+        openFleetHealthModal();
+        updateHeader();
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-bolt"></i> <span>Run Smoke Test Now</span>`;
+        probeBox.innerText = "Error executing smoke test: " + err.message;
+      }
     }
 
     function inferTaskSkills(m, repo) {
