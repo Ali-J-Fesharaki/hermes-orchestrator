@@ -23,6 +23,41 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
+__all__ = [
+    "PedagogicalLesson",
+    "AntiPatternDefinition",
+    "PostMortemRecord",
+    "ANTI_PATTERN_CATALOG",
+    "FALLBACK_ANOMALY",
+    "PostMortemPedagogyEngine",
+    "_atomic_write_text",
+]
+
+
+# ==============================================================================
+# 0. Atomic File Helpers
+# ==============================================================================
+
+def _atomic_write_text(path: Union[Path, str], content: str) -> None:
+    """Atomic write via temporary file replacement with fsync."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = p.with_suffix(f"{p.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(p)
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
 # ==============================================================================
 # 1. Architecture & Data Structures
 # ==============================================================================
@@ -320,23 +355,9 @@ class PostMortemPedagogyEngine:
         }
         self._load_existing_records()
 
-    def _atomic_write_text(self, path: Path, content: str) -> None:
+    def _atomic_write_text(self, path: Union[Path, str], content: str) -> None:
         """Atomic write via temporary file replacement with fsync."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            tmp_path.replace(path)
-        except Exception:
-            if tmp_path.exists():
-                try:
-                    tmp_path.unlink()
-                except OSError:
-                    pass
-            raise
+        _atomic_write_text(path, content)
 
     def _load_existing_records(self) -> None:
         """Loads historical post-mortem records from disk if available."""
