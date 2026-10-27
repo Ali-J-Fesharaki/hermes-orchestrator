@@ -105,7 +105,25 @@
     <!-- ================================================================= -->
     <!-- TAB 1: MULTI-REPO KANBAN BOARD                                    -->
     <!-- ================================================================= -->
-    <div id="tab-kanban" class="space-y-6">
+    <div id="tab-kanban" class="space-y-4">
+      <!-- Fleet Pipeline Execution Diagnostic Bar (Real-Time Idle/Active Reasoner) -->
+      <div id="fleet-execution-banner" class="p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-slate-900/80 border-slate-800">
+        <div class="flex items-center gap-3">
+          <span id="banner-status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <div>
+            <p id="banner-status-title" class="text-xs font-bold text-white flex items-center gap-2">
+              <i class="fa-solid fa-satellite-dish text-indigo-400"></i> Fleet Execution Sentinel: Initializing...
+            </p>
+            <p id="banner-status-desc" class="text-[11px] text-slate-400">
+              Evaluating live queues and worker dispatch readiness...
+            </p>
+          </div>
+        </div>
+        <div id="banner-action-area" class="flex items-center gap-2 flex-shrink-0">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
       <!-- Repo Filter & Controls -->
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center gap-3">
@@ -1435,6 +1453,38 @@
                 </div>
               `;
             })()}
+            ${(() => {
+              if (col === 'done' || m.status === 'completed') {
+                return `
+                  <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-emerald-400 font-mono">
+                    <span class="flex items-center gap-1"><i class="fa-solid fa-circle-check"></i> Executed & Verified</span>
+                  </div>
+                `;
+              }
+              if (isWorking) {
+                return `
+                  <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-indigo-300 font-mono">
+                    <span class="flex items-center gap-1 animate-pulse"><i class="fa-solid fa-spinner fa-spin text-indigo-400"></i> Actively Executing (Hermes Agent)</span>
+                  </div>
+                `;
+              }
+              if (!isApproved) {
+                return `
+                  <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-amber-300 font-mono" title="AI plan waiting for human authorization. Click ⚡ button to approve.">
+                    <span class="flex items-center gap-1"><i class="fa-solid fa-hand text-amber-400"></i> Awaiting Human ⚡ Approval</span>
+                    <span class="text-[9px] text-amber-400/80 font-sans">Click ⚡ to run</span>
+                  </div>
+                `;
+              }
+              if (col === 'ready') {
+                return `
+                  <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-teal-300 font-mono" title="Approved for autonomous execution. Will dispatch in next orchestrator cycle.">
+                    <span class="flex items-center gap-1"><i class="fa-solid fa-bolt text-teal-400"></i> Approved & Queued for Dispatch</span>
+                  </div>
+                `;
+              }
+              return '';
+            })()}
           `;
 
           if (col === 'backlog') { colBacklog.appendChild(card); cBacklog++; }
@@ -1450,6 +1500,69 @@
       document.getElementById('count-inprogress').innerText = cInprog;
       document.getElementById('count-inreview').innerText = cInreview;
       document.getElementById('count-done').innerText = cDone;
+
+      updateFleetExecutionBanner(cBacklog, cReady, cInprog, cDone);
+    }
+
+    function updateFleetExecutionBanner(cBacklog, cReady, cInprog, cDone) {
+      const banner = document.getElementById('fleet-execution-banner');
+      const dot = document.getElementById('banner-status-dot');
+      const title = document.getElementById('banner-status-title');
+      const desc = document.getElementById('banner-status-desc');
+      const actionArea = document.getElementById('banner-action-area');
+      if (!banner || !dot || !title || !desc || !actionArea) return;
+
+      const isOrchRunning = Boolean(globalData.orchestrator_running);
+      const isGatewayOnline = (globalData.router_status === 'online');
+      const q = globalData.quota_optimizer || {};
+      const isQuotaPaused = (q.status === 'WAITING_FOR_QUOTA' || q.alarm_active);
+      const activeAgentsCount = Object.keys(globalData.telemetry?.active_agents || {}).length;
+
+      actionArea.innerHTML = '';
+
+      if (!isGatewayOnline) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-rose-950/40 border-rose-500/40";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping";
+        title.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-rose-400"></i> LLM Router Disconnected (:8045 / :7836 Offline)`;
+        desc.innerText = "Plans cannot execute because the local LLM router port is unreachable. Click 'Inspect Health' to diagnose.";
+        actionArea.innerHTML = `<button onclick="openFleetHealthModal()" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold">Inspect Health</button>`;
+      } else if (!isOrchRunning) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-slate-900/90 border-slate-700";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-slate-500";
+        title.innerHTML = `<i class="fa-solid fa-circle-pause text-amber-400"></i> Autonomous Loop is OFF (System Idle)`;
+        desc.innerText = `There are ${cReady} ready milestone(s) and ${cBacklog} backlog plan(s), but background auto-execution is turned OFF.`;
+        actionArea.innerHTML = `<button onclick="toggleAutonomousLoop()" class="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-play"></i> Enable Auto Loop</button>`;
+      } else if (isQuotaPaused) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-amber-950/40 border-amber-500/40";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse";
+        title.innerHTML = `<i class="fa-solid fa-hourglass-half text-amber-400"></i> Token Quota Cooldown Active (${q.minutes_remaining || 0}m remaining)`;
+        desc.innerText = `Orchestrator is temporarily paused until ${q.next_run_iso || 'soon'} to protect Google account rolling limits from 429 penalties.`;
+        actionArea.innerHTML = `<button onclick="openQuotaOptimizerModal()" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">View Quota Details</button>`;
+      } else if (cInprog > 0 || activeAgentsCount > 0) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-indigo-950/40 border-indigo-500/40";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse";
+        title.innerHTML = `<i class="fa-solid fa-rocket text-indigo-400"></i> ${activeAgentsCount || cInprog} Hermes Agent(s) Actively Executing Code`;
+        desc.innerText = `Workers are generating code, running compiler tests, and committing atomically. Next tasks will dispatch automatically when slots open.`;
+        actionArea.innerHTML = `<button onclick="switchTab('telemetry')" class="px-3 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold">Live Telemetry</button>`;
+      } else if (cReady > 0) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-teal-950/40 border-teal-500/40";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse";
+        title.innerHTML = `<i class="fa-solid fa-bolt text-teal-400"></i> ${cReady} Milestone(s) Approved & Ready for Dispatch`;
+        desc.innerText = "Execution queue is ready! The orchestrator daemon will dispatch worker agents in its next cycle pass (within ~15s).";
+        actionArea.innerHTML = `<button onclick="triggerOrchestrator()" class="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-forward-step"></i> Trigger Dispatch Now</button>`;
+      } else if (cBacklog > 0) {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-amber-950/30 border-amber-500/30";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400";
+        title.innerHTML = `<i class="fa-solid fa-hand text-amber-400"></i> ${cBacklog} Plan(s) Waiting in Backlog for ⚡ Human Approval`;
+        desc.innerText = "Plans exist on the board, but execution is blocked waiting for human authorization. Click the ⚡ button on cards, or toggle 'Auto-Approve Plans' in Repositories.";
+        actionArea.innerHTML = `<button onclick="switchTab('repos')" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Manage Auto-Approve</button>`;
+      } else {
+        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-slate-900/80 border-slate-800";
+        dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400";
+        title.innerHTML = `<i class="fa-solid fa-check-double text-emerald-400"></i> All Milestones Completed & Goals Up to Date`;
+        desc.innerText = "Execution queue is empty. The autonomous strategic planner will audit repositories and replenish the pipeline buffer.";
+        actionArea.innerHTML = `<button onclick="openSteerModal()" class="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-wand-magic-sparkles"></i> Steer Planner</button>`;
+      }
     }
 
     function renderRepos() {
