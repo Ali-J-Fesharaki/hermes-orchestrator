@@ -20,6 +20,8 @@ Architecture:
 import os
 import sys
 import json
+import re
+import time
 import subprocess
 import urllib.request
 import urllib.error
@@ -71,11 +73,15 @@ def execute_graphql(query: str, variables: dict | None = None) -> dict:
             data=json.dumps(payload).encode("utf-8"),
             headers=headers
         )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            return {"error": str(e)}
+        last_err = ""
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(1.0)
+        return {"error": last_err}
 
     # Fallback to gh api graphql CLI
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
@@ -93,9 +99,9 @@ def execute_graphql(query: str, variables: dict | None = None) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-def fetch_project_v2_data(owner: str = DEFAULT_OWNER, project_number: int = DEFAULT_PROJECT_NUMBER) -> dict:
-    """Queries project details, status field options, and all current items."""
-    query = """
+def fetch_project_v2_data(owner: str = DEFAULT_OWNER, project_number: int = DEFAULT_PROJECT_NUMBER, max_pages: int = 50) -> dict:
+    """Queries project details, status field options, and all current items using cursor pagination."""
+    init_query = """
     query($login: String!, $number: Int!) {
       user(login: $login) {
         projectV2(number: $number) {
@@ -114,6 +120,11 @@ def fetch_project_v2_data(owner: str = DEFAULT_OWNER, project_number: int = DEFA
             }
           }
           items(first: 100) {
+            totalCount
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
             nodes {
               id
               fieldValues(first: 10) {
@@ -134,10 +145,6 @@ def fetch_project_v2_data(owner: str = DEFAULT_OWNER, project_number: int = DEFA
                   title
                   body
                   state
-                  repository {
-                    name
-                    nameWithOwner
-                  }
                 }
                 ... on DraftIssue {
                   id
@@ -151,49 +158,123 @@ def fetch_project_v2_data(owner: str = DEFAULT_OWNER, project_number: int = DEFA
       }
     }
     """
-    res = execute_graphql(query, {"login": owner, "number": project_number})
-    if "data" in res and res["data"].get("user", {}).get("projectV2"):
-        p = res["data"]["user"]["projectV2"]
-        # Extract status field & options mapping
-        status_field_id = None
-        status_options = {}
-        for f in p.get("fields", {}).get("nodes", []):
-            if f and f.get("name") == "Status":
-                status_field_id = f.get("id")
-                for opt in f.get("options", []):
-                    status_options[opt["name"].lower()] = opt["id"]
-        
-        items = []
-        for item in p.get("items", {}).get("nodes", []):
-            if not item:
-                continue
-            item_id = item.get("id")
-            content = item.get("content") or {}
-            title = content.get("title", "")
-            body = content.get("body", "")
-            
-            # Find status
-            status = "Backlog"
-            for fv in item.get("fieldValues", {}).get("nodes", []):
-                if fv and fv.get("field", {}).get("name") == "Status":
-                    status = fv.get("name", "Backlog")
-                    
-            items.append({
-                "item_id": item_id,
-                "title": title,
-                "body": body,
-                "status": status,
-                "raw_content": content
-            })
-            
-        return {
-            "project_id": p.get("id"),
-            "title": p.get("title"),
-            "status_field_id": status_field_id,
-            "status_options": status_options,
-            "items": items
+    res = execute_graphql(init_query, {"login": owner, "number": project_number})
+    if "data" not in res or not res["data"].get("user", {}).get("projectV2"):
+        return res
+
+    p = res["data"]["user"]["projectV2"]
+    status_field_id = None
+    status_options = {}
+    for f in p.get("fields", {}).get("nodes", []):
+        if f and f.get("name") == "Status":
+            status_field_id = f.get("id")
+            for opt in f.get("options", []):
+                status_options[opt["name"].lower()] = opt["id"]
+
+    raw_nodes = list(p.get("items", {}).get("nodes", []))
+    page_info = p.get("items", {}).get("pageInfo", {})
+
+    page_query = """
+    query($login: String!, $number: Int!, $after: String!) {
+      user(login: $login) {
+        projectV2(number: $number) {
+          items(first: 100, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              fieldValues(first: 10) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field {
+                      ... on ProjectV2FieldCommon {
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+              content {
+                ... on Issue {
+                  id
+                  title
+                  body
+                  state
+                }
+                ... on DraftIssue {
+                  id
+                  title
+                  body
+                }
+              }
+            }
+          }
         }
-    return res
+      }
+    }
+    """
+
+    page = 1
+    while page_info.get("hasNextPage") and page_info.get("endCursor") and page < max_pages:
+        page += 1
+        cursor = page_info["endCursor"]
+        next_res = execute_graphql(page_query, {"login": owner, "number": project_number, "after": cursor})
+        next_data = next_res.get("data", {}).get("user", {}).get("projectV2", {}).get("items", {})
+        next_nodes = next_data.get("nodes", [])
+        if not next_nodes:
+            break
+        raw_nodes.extend(next_nodes)
+        page_info = next_data.get("pageInfo", {})
+
+    items = []
+    for item in raw_nodes:
+        if not item:
+            continue
+        item_id = item.get("id")
+        content = item.get("content") or {}
+        title = content.get("title", "")
+        body = content.get("body", "")
+
+        status = "Backlog"
+        for fv in item.get("fieldValues", {}).get("nodes", []):
+            if fv and fv.get("field", {}).get("name") == "Status":
+                status = fv.get("name", "Backlog")
+
+        items.append({
+            "item_id": item_id,
+            "title": title,
+            "body": body,
+            "status": status,
+            "raw_content": content
+        })
+
+    return {
+        "project_id": p.get("id"),
+        "title": p.get("title"),
+        "status_field_id": status_field_id,
+        "status_options": status_options,
+        "items": items
+    }
+
+def batch_delete_project_v2_items(project_id: str, item_ids: list, chunk_size: int = 25) -> int:
+    """Deletes multiple items from GitHub Projects v2 in batched GraphQL requests (up to 25 per call)."""
+    if not item_ids:
+        return 0
+    deleted = 0
+    for i in range(0, len(item_ids), chunk_size):
+        chunk = item_ids[i:i + chunk_size]
+        mut_lines = [
+            f'  d{idx}: deleteProjectV2Item(input: {{projectId: "{project_id}", itemId: "{it_id}"}}) {{ deletedItemId }}'
+            for idx, it_id in enumerate(chunk)
+        ]
+        mutation = "mutation {\n" + "\n".join(mut_lines) + "\n}"
+        res = execute_graphql(mutation)
+        if "data" in res and res["data"]:
+            deleted += len([k for k, v in res["data"].items() if v and v.get("deletedItemId")])
+    return deleted
 
 def delete_project_v2_item(project_id: str, item_id: str) -> dict:
     """Deletes an item from GitHub Projects v2."""
@@ -455,11 +536,16 @@ def sync_github_to_cockpit(owner: str = DEFAULT_OWNER, project_number: int = DEF
         "local_updated": updated_count
     }
 
+def normalize_milestone_title(title: str) -> str:
+    """Strips any [repo_id] prefix and normalizes whitespace."""
+    t = re.sub(r"^\[[^\]]+\]\s*", "", title).strip().lower()
+    return re.sub(r"\s+", " ", t)
+
 def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_number: int = DEFAULT_PROJECT_NUMBER) -> dict:
     """
     Two-way Garbage Collection & Card Alignment Engine:
       1. Prunes stale orphan cards from GitHub Projects v2 that no longer exist in repositories.json.
-      2. Deduplicates any duplicate cards with identical titles.
+      2. Deduplicates any duplicate cards with identical titles via batch deletion.
       3. Pushes any missing local milestones to GitHub Projects v2 with the correct status column.
       4. Aligns status columns (Done, In progress, Backlog) so Cockpit and GitHub Projects match 1:1.
     """
@@ -486,97 +572,106 @@ def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_numb
     for r in repos_data.get("repositories", []):
         r_id = r.get("id", "repo")
         for m in r.get("milestones", []):
-            clean_name = m.get("name", "").strip().lower()
-            local_milestones[clean_name] = (r_id, m)
+            norm_name = normalize_milestone_title(m.get("name", ""))
+            local_milestones[norm_name] = (r_id, m)
 
     # 1. Deduplicate, Prune Orphans, and Align Status from GitHub Projects
     seen_titles = {}
-    pruned_count = 0
+    items_to_delete = []
     aligned_count = 0
     remaining_items = []
 
     for it in items:
-        gh_title = it.get("title", "").strip().lower()
-        clean_title = gh_title
-        for r_id in ["phd_proposal", "general", "repo"]:
-            clean_title = clean_title.replace(f"[{r_id}]", "").strip()
+        gh_title = it.get("title", "").strip()
+        norm_title = normalize_milestone_title(gh_title)
 
-        # Check duplicate
-        if clean_title in seen_titles:
-            # Duplicate item -> delete from GitHub Projects
-            delete_project_v2_item(project_id, it["item_id"])
-            pruned_count += 1
-            continue
-
-        # Check orphan and find matching local milestone
+        # Check orphan against local milestones
         matched_m = None
         for local_name, (r_id, m) in local_milestones.items():
-            if local_name in clean_title or clean_title in local_name:
+            if local_name == norm_title or local_name in norm_title or norm_title in local_name:
                 matched_m = m
                 break
 
         if not matched_m:
-            delete_project_v2_item(project_id, it["item_id"])
-            pruned_count += 1
-        else:
-            seen_titles[clean_title] = it
-            remaining_items.append(it)
-            matched_m["github_item_id"] = it["item_id"]
+            # Orphan card not in local repositories.json
+            items_to_delete.append(it["item_id"])
+            continue
 
-            # Two-way status alignment
-            gh_status = it.get("status", "")
-            local_status = matched_m.get("status", "pending")
-
-            if local_status == "completed":
-                if gh_status != "Done":
-                    opt_id = status_options.get("done")
-                    if status_field_id and opt_id:
-                        update_item_status(project_id, it["item_id"], status_field_id, opt_id)
-                        it["status"] = "Done"
-                        aligned_count += 1
-                matched_m["github_column"] = "Done"
-            elif local_status == "in_progress":
-                if gh_status != "In progress":
-                    opt_id = status_options.get("in progress")
-                    if status_field_id and opt_id:
-                        update_item_status(project_id, it["item_id"], status_field_id, opt_id)
-                        it["status"] = "In progress"
-                        aligned_count += 1
-                matched_m["github_column"] = "In progress"
-            elif local_status == "in_review":
-                if gh_status != "In review":
-                    opt_id = status_options.get("in review")
-                    if status_field_id and opt_id:
-                        update_item_status(project_id, it["item_id"], status_field_id, opt_id)
-                        it["status"] = "In review"
-                        aligned_count += 1
-                matched_m["github_column"] = "In review"
+        # Check duplicate
+        if norm_title in seen_titles:
+            # Duplicate item -> delete from GitHub Projects
+            prev_it = seen_titles[norm_title]
+            # If current item is in "Done" and previous wasn't, keep current and delete previous
+            if it.get("status") == "Done" and prev_it.get("status") != "Done":
+                items_to_delete.append(prev_it["item_id"])
+                seen_titles[norm_title] = it
+                matched_m["github_item_id"] = it["item_id"]
             else:
-                # Local is pending, todo, or backlog
-                # If human changed status on GitHub, adopt GitHub's column
-                if gh_status in ["In progress", "In review", "Ready", "Done", "Backlog"]:
-                    matched_m["github_column"] = gh_status
-                    if gh_status == "Done":
-                        matched_m["status"] = "completed"
-                    elif gh_status == "In progress":
-                        matched_m["status"] = "in_progress"
-                    elif gh_status == "In review":
-                        matched_m["status"] = "in_review"
-                    elif gh_status == "Ready":
-                        matched_m["status"] = "pending"
-                    elif gh_status == "Backlog":
-                        matched_m["status"] = "backlog"
-                else:
-                    # Sync local to GitHub
-                    target_col = "Ready" if local_status in ["pending", "todo"] else "Backlog"
-                    opt_id = status_options.get(target_col.lower())
-                    if status_field_id and opt_id and gh_status != target_col:
-                        update_item_status(project_id, it["item_id"], status_field_id, opt_id)
-                        it["status"] = target_col
-                        aligned_count += 1
-                    matched_m["github_column"] = target_col
+                items_to_delete.append(it["item_id"])
+            continue
 
-    # 2. Push missing milestones from local to GitHub
+        seen_titles[norm_title] = it
+        remaining_items.append(it)
+        matched_m["github_item_id"] = it["item_id"]
+
+        # Two-way status alignment
+        gh_status = it.get("status", "")
+        local_status = matched_m.get("status", "pending")
+
+        if local_status == "completed":
+            if gh_status != "Done":
+                opt_id = status_options.get("done")
+                if status_field_id and opt_id:
+                    update_item_status(project_id, it["item_id"], status_field_id, opt_id)
+                    it["status"] = "Done"
+                    aligned_count += 1
+            matched_m["github_column"] = "Done"
+        elif local_status == "in_progress":
+            if gh_status != "In progress":
+                opt_id = status_options.get("in progress")
+                if status_field_id and opt_id:
+                    update_item_status(project_id, it["item_id"], status_field_id, opt_id)
+                    it["status"] = "In progress"
+                    aligned_count += 1
+            matched_m["github_column"] = "In progress"
+        elif local_status == "in_review":
+            if gh_status != "In review":
+                opt_id = status_options.get("in review")
+                if status_field_id and opt_id:
+                    update_item_status(project_id, it["item_id"], status_field_id, opt_id)
+                    it["status"] = "In review"
+                    aligned_count += 1
+            matched_m["github_column"] = "In review"
+        else:
+            if gh_status in ["In progress", "In review", "Ready", "Done", "Backlog"]:
+                matched_m["github_column"] = gh_status
+                if gh_status == "Done":
+                    matched_m["status"] = "completed"
+                elif gh_status == "In progress":
+                    matched_m["status"] = "in_progress"
+                elif gh_status == "In review":
+                    matched_m["status"] = "in_review"
+                elif gh_status == "Ready":
+                    matched_m["status"] = "pending"
+                elif gh_status == "Backlog":
+                    matched_m["status"] = "backlog"
+            else:
+                target_col = "Ready" if local_status in ["pending", "todo"] else "Backlog"
+                opt_id = status_options.get(target_col.lower())
+                if status_field_id and opt_id and gh_status != target_col:
+                    update_item_status(project_id, it["item_id"], status_field_id, opt_id)
+                    it["status"] = target_col
+                    aligned_count += 1
+                matched_m["github_column"] = target_col
+
+    # Execute batch deletion of duplicates & orphans
+    pruned_count = 0
+    if items_to_delete:
+        print(f"[*] Pruning {len(items_to_delete)} duplicate/orphan cards in batches...")
+        pruned_count = batch_delete_project_v2_items(project_id, items_to_delete)
+        print(f"✅ Successfully deleted {pruned_count} zombie/duplicate cards from GitHub Projects!")
+
+    # 2. Push genuinely missing milestones from local to GitHub
     pushed_count = 0
     existing_gh_titles = set(seen_titles.keys())
 
@@ -584,8 +679,8 @@ def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_numb
         r_id = r.get("id", "repo")
         for m in r.get("milestones", []):
             m_name = m.get("name", "").strip()
-            clean_name = m_name.lower()
-            if not any(clean_name in et or et in clean_name for et in existing_gh_titles):
+            norm_name = normalize_milestone_title(m_name)
+            if not any(norm_name == et or norm_name in et or et in norm_name for et in existing_gh_titles):
                 formatted_title = f"[{r_id}] {m_name}"
                 planner_label = m.get("planned_by") or m.get("added_by") or "Claude Opus / Gemini"
                 body_text = f"**Planner Model:** `{planner_label}`\n\n**Details:** {m.get('details', '')}\n\n**File Target:** `{m.get('relative_filepath', '—')}`\n\n*Auto-generated via Hermes Autonomous Orchestrator*"
@@ -594,11 +689,11 @@ def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_numb
                     new_item_id = res["data"]["addProjectV2DraftIssue"]["projectItem"]["id"]
                     m["github_item_id"] = new_item_id
                     pushed_count += 1
-                    # Set proper initial column
                     initial_status = "Done" if m.get("status") == "completed" else ("In progress" if m.get("status") == "in_progress" else "Backlog")
                     opt_id = status_options.get(initial_status.lower())
                     if status_field_id and opt_id:
                         update_item_status(project_id, new_item_id, status_field_id, opt_id)
+                existing_gh_titles.add(norm_name)
 
     # 3. Save updated repositories.json
     with open(REPOS_FILE, "w", encoding="utf-8") as f:
@@ -611,7 +706,6 @@ def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_numb
         "total_github_items": len(remaining_items) + pushed_count,
         "total_local_milestones": sum(len(r.get("milestones", [])) for r in repos_data.get("repositories", []))
     }
-
 def push_milestones_to_github(owner: str = DEFAULT_OWNER, project_number: int = DEFAULT_PROJECT_NUMBER) -> dict:
     """Reconciles, prunes orphans, and pushes local milestones to GitHub Projects."""
     return reconcile_and_prune_github_projects(owner, project_number)
