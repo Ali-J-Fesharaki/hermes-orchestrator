@@ -31,7 +31,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, Tuple, List, Dict, Optional
 
 # Base Paths
 AUTO_DIR = Path(__file__).resolve().parent.parent
