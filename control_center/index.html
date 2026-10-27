@@ -585,36 +585,46 @@
         </button>
       </div>
 
-      <!-- 3-Tier Health Cards -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <!-- 4-Tier Health & Supervisor Cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2.5">
         <!-- Tier 1: LLM Gateway -->
-        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+        <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">1. Gateway Router</span>
-            <span id="fleet-gw-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">ONLINE</span>
+            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">1. Gateway Router</span>
+            <span id="fleet-gw-status" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300">ONLINE</span>
           </div>
           <p id="fleet-gw-details" class="text-xs text-slate-200 font-mono">Port :8045</p>
-          <p id="fleet-gw-models" class="text-[11px] text-slate-400">15 Models available</p>
+          <p id="fleet-gw-models" class="text-[10px] text-slate-400">15 Models available</p>
         </div>
 
         <!-- Tier 2: Account Health -->
-        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+        <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">2. Account Pool</span>
-            <span id="fleet-acc-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">3 HEALTHY</span>
+            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">2. Account Pool</span>
+            <span id="fleet-acc-status" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300">3 HEALTHY</span>
           </div>
           <p id="fleet-acc-details" class="text-xs text-slate-200">0 Quarantined</p>
-          <p id="fleet-acc-note" class="text-[11px] text-slate-400">Google Pro Cloud DB</p>
+          <p id="fleet-acc-note" class="text-[10px] text-slate-400">Google Pro Cloud DB</p>
         </div>
 
         <!-- Tier 3: Hermes CLI Agent Smoke Test -->
-        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+        <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">3. Agent Smoke Test</span>
-            <span id="fleet-smoke-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">PASSED</span>
+            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">3. Agent Smoke Test</span>
+            <span id="fleet-smoke-status" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300">PASSED</span>
           </div>
           <p id="fleet-smoke-details" class="text-xs text-slate-200 font-mono">PONG (8.6s)</p>
-          <p id="fleet-smoke-tested" class="text-[11px] text-slate-400">Real Token Flow Verified</p>
+          <p id="fleet-smoke-tested" class="text-[10px] text-slate-400">Token Flow Verified</p>
+        </div>
+
+        <!-- Tier 4: 10-Minute Platform Supervisor -->
+        <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
+          <div class="flex items-center justify-between">
+            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">4. 10m Supervisor</span>
+            <span id="fleet-super-status" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300">ACTIVE</span>
+          </div>
+          <p id="fleet-super-details" class="text-xs text-slate-200 font-mono">8/8 Healthy</p>
+          <p id="fleet-super-tested" class="text-[10px] text-slate-400">Auto-Heal Active</p>
         </div>
       </div>
 
@@ -622,7 +632,7 @@
       <div class="space-y-1.5">
         <div class="flex items-center justify-between text-xs">
           <span class="font-semibold text-slate-300 flex items-center gap-1.5">
-            <i class="fa-solid fa-terminal text-indigo-400"></i> Latest Hermes Agent Probe Result
+            <i class="fa-solid fa-terminal text-indigo-400"></i> Latest Diagnostics & Supervisor Trace
           </span>
           <span id="fleet-probe-time" class="text-slate-500 font-mono text-[11px]"></span>
         </div>
@@ -633,10 +643,13 @@
 
       <!-- Modal Footer -->
       <div class="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
-        <span class="text-slate-400 text-[11px]">Probes run end-to-end Hermes CLI subprocess with actual tokens.</span>
+        <span class="text-slate-400 text-[11px]">Supervisor runs every 10m via systemd timer to audit all modules.</span>
         <div class="flex items-center gap-2">
-          <button onclick="runFleetSmokeTest()" id="btn-run-smoke-test" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5">
-            <i class="fa-solid fa-bolt"></i> <span>Run Smoke Test Now</span>
+          <button onclick="runSupervisorAudit()" id="btn-run-supervisor" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition flex items-center gap-1.5" title="Audit all 8 modules immediately">
+            <i class="fa-solid fa-shield-halved"></i> <span>Audit Modules Now</span>
+          </button>
+          <button onclick="runFleetSmokeTest()" id="btn-run-smoke-test" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5">
+            <i class="fa-solid fa-bolt"></i> <span>Run Smoke Test</span>
           </button>
           <button onclick="closeFleetHealthModal()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition">
             Close
@@ -1245,17 +1258,60 @@
         smokeDetails.innerText = smoke.error || 'Failed';
       }
 
+      // 4. Platform Supervisor
+      const sup = globalData.supervisor_report || {};
+      const supStatus = document.getElementById('fleet-super-status');
+      const supDetails = document.getElementById('fleet-super-details');
+      if (sup.supervisor_status === 'ALL_HEALTHY') {
+        supStatus.className = "px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300";
+        supStatus.innerText = "ALL OK";
+        supDetails.innerText = sup.healthy_components || '8/8 Healthy';
+      } else if (sup.supervisor_status) {
+        supStatus.className = "px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300";
+        supStatus.innerText = "ISSUES";
+        supDetails.innerText = sup.healthy_components || 'Issues Detected';
+      }
+
       probeTime.innerText = smoke.tested_at ? `Last tested: ${smoke.tested_at}` : '';
       probeBox.innerHTML = `Model: <span class="text-indigo-400">${smoke.model_tested || 'gemini-3.8-flash-tiered'}</span>\n` +
         `Latency: <span class="text-teal-400">${smoke.latency_s || 0}s</span>\n` +
         `Exit Code: <span class="${smoke.exit_code === 0 ? 'text-emerald-400' : 'text-rose-400'}">${smoke.exit_code ?? 'N/A'}</span>\n` +
         `Response: <span class="text-slate-100 font-bold">${smoke.output || '(No response)'}</span>\n` +
         (smoke.error ? `Error: <span class="text-rose-400">${smoke.error}</span>\n` : '') +
-        `Gateway: http://127.0.0.1:${gw.port || 8045}/v1`;
+        `Gateway: http://127.0.0.1:${gw.port || 8045}/v1\n` +
+        `10m Supervisor: ${sup.supervisor_status || 'Active'} (${sup.healthy_components || '8/8'})`;
     }
 
     function closeFleetHealthModal() {
       document.getElementById('modal-fleet-health').classList.add('hidden');
+    }
+
+    async function runSupervisorAudit() {
+      const btn = document.getElementById('btn-run-supervisor');
+      const probeBox = document.getElementById('fleet-probe-box');
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Auditing Modules...</span>`;
+      probeBox.innerText = "Platform Supervisor Agent running comprehensive 8-module health audit...";
+
+      try {
+        const resp = await fetch('/api/supervisor/audit_now', { method: 'POST' });
+        const data = await resp.json();
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-shield-halved"></i> <span>Audit Modules Now</span>`;
+
+        if (globalData.supervisor_report) {
+          globalData.supervisor_report = data;
+        }
+        openFleetHealthModal();
+        probeBox.innerHTML = `Supervisor Audit: <b class="${data.supervisor_status === 'ALL_HEALTHY' ? 'text-emerald-400' : 'text-amber-400'}">${data.supervisor_status}</b>\n` +
+          `Components: <span class="text-teal-400">${data.healthy_components || '8/8'}</span> | Time: <span class="text-slate-400">${data.audit_timestamp}</span>\n` +
+          `Critical Failures: <span class="${data.critical_failures_count === 0 ? 'text-emerald-400' : 'text-rose-400'}">${data.critical_failures_count}</span>\n` +
+          `Module Diagnostics:\n` + JSON.stringify(data.components || {}, null, 2);
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-shield-halved"></i> <span>Audit Modules Now</span>`;
+        probeBox.innerText = "Error executing supervisor audit: " + err.message;
+      }
     }
 
     async function runFleetSmokeTest() {

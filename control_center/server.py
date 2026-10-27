@@ -103,8 +103,24 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_fleet_health()
         elif parsed.path == "/api/roadmap":
             self.handle_roadmap()
+        elif parsed.path == "/api/supervisor/report":
+            self.handle_supervisor_report()
         else:
             super().do_GET()
+
+    def handle_supervisor_report(self):
+        report_file = DASH_DIR / "SUPERVISOR_AUDIT_REPORT.json"
+        data = {"supervisor_status": "UNKNOWN", "healthy_components": "0/0"}
+        if report_file.exists():
+            try:
+                data = json.loads(report_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_roadmap(self):
         roadmap_path = BASE_DIR / "FUTURE_ROADMAP.md"
@@ -236,8 +252,23 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_clear_agents()
         elif parsed.path == "/api/fleet/smoke_test":
             self.handle_fleet_smoke_test()
+        elif parsed.path == "/api/supervisor/audit_now":
+            self.handle_supervisor_audit_now()
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_supervisor_audit_now(self):
+        try:
+            from platform_supervisor_agent import PlatformSupervisorAgent
+            agent = PlatformSupervisorAgent()
+            data = agent.run_full_audit()
+        except Exception as e:
+            data = {"supervisor_status": "ERROR", "error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_fleet_smoke_test(self):
         try:
@@ -1346,6 +1377,15 @@ def get_system_snapshot():
     # 13. Concurrency & Slot Allocation Diagnostics
     concurrency_diag = compute_concurrency_diagnostics(repos, telemetry, rate_governor, accounts)
 
+    # 14. 10-Minute Platform Supervisor Audit Report
+    supervisor_report = {}
+    report_file = DASH_DIR / "SUPERVISOR_AUDIT_REPORT.json"
+    if report_file.exists():
+        try:
+            supervisor_report = json.loads(report_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     return {
         "telemetry": telemetry,
         "repositories": repos,
@@ -1363,6 +1403,7 @@ def get_system_snapshot():
         "rate_governor": rate_governor,
         "failed_tasks": failed_tasks,
         "concurrency_diagnostics": concurrency_diag,
+        "supervisor_report": supervisor_report,
         "orchestrator_running": bool(orch_pid),
         "orchestrator_pid": orch_pid,
         "github_bridge": {
