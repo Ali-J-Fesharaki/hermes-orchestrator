@@ -1267,7 +1267,7 @@ class VerificationReportPersister:
             f"**Report ID:** `{report.report_id}`  ",
             f"**Execution Timestamp:** `{time_str}`  ",
             f"**Overall Pipeline Verdict:** **{badge}**  ",
-            f"**Aggregate Integration Fidelity ($\Psi$):** `{report.aggregate_fidelity * 100:.2f}%`",
+            f"**Aggregate Integration Fidelity (Psi):** `{report.aggregate_fidelity * 100:.2f}%`",
             "",
             "---",
             "",
@@ -1283,7 +1283,7 @@ class VerificationReportPersister:
             "",
             "## 2. Cross-Subsystem Journey Verdict Matrix",
             "",
-            "| Scenario ID | Journey Type | Status | Fidelity ($\Psi$) | Latency (s) | Peak Mem (MB) | Steps Passed | Warnings | Errors |",
+            "| Scenario ID | Journey Type | Status | Fidelity (Psi) | Latency (s) | Peak Mem (MB) | Steps Passed | Warnings | Errors |",
             "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
         ]
 
