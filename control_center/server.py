@@ -10,6 +10,7 @@ import re
 import time
 import json
 import sqlite3
+import threading
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -107,8 +108,22 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_capacity_forecast()
         elif parsed.path == "/api/supervisor/report":
             self.handle_supervisor_report()
+        elif parsed.path == "/api/performance/benchmark":
+            self.handle_performance_benchmark()
         else:
             super().do_GET()
+
+    def handle_performance_benchmark(self):
+        try:
+            from performance_profiler import get_performance_report
+            data = get_performance_report()
+        except Exception as e:
+            data = {"error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_capacity_forecast(self):
         try:
@@ -227,6 +242,9 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             payload = json.loads(body)
         except Exception:
             payload = {}
+
+        # Any POST request is a state mutation — invalidate in-memory snapshot cache immediately!
+        invalidate_snapshot_cache()
 
         if parsed.path == "/api/milestone/toggle":
             self.handle_toggle_milestone(payload)
@@ -962,7 +980,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store")
         self.end_headers()
 
-        data = get_system_snapshot()
+        data = get_cached_system_snapshot(max_age_s=2.5)
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_toggle_milestone(self, payload):
@@ -1187,40 +1205,82 @@ def get_accounts_status():
             pass
     return accounts
 
-def check_router_health() -> dict:
-    """Probes local router on port 8045/7836 with bearer token to verify real LLM gateway health."""
-    env_file = Path("/home/ajf/.hermes/.env")
-    keys = []
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if "=" in line and any(k in line for k in ["KEY", "TOKEN"]):
-                val = line.split("=", 1)[1].strip().strip("\"'")
-                if val and val not in keys:
-                    keys.append(val)
+_ROUTER_HEALTH_CACHE = None
+_ROUTER_HEALTH_TS = 0
+_ROUTER_HEALTH_LOCK = threading.Lock()
 
-    for port in [8045, 7836]:
-        for key in keys + [""]:
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models")
-            if key:
-                req.add_header("Authorization", f"Bearer {key}")
-            try:
-                with urllib.request.urlopen(req, timeout=1.5) as r:
-                    data = json.loads(r.read().decode())
-                    models = data.get("data", [])
-                    return {
-                        "status": "online",
-                        "port": port,
-                        "models_count": len(models),
-                        "checked_at": datetime.now().strftime("%H:%M:%S")
-                    }
-            except Exception:
-                pass
-    return {
-        "status": "offline",
-        "port": 8045,
-        "models_count": 0,
-        "checked_at": datetime.now().strftime("%H:%M:%S")
-    }
+def check_router_health(max_age_s: float = 20.0) -> dict:
+    """Probes local router on port 8045/7836 with a 20-second in-memory cache to prevent socket hammering."""
+    global _ROUTER_HEALTH_CACHE, _ROUTER_HEALTH_TS
+    now = time.time()
+    if _ROUTER_HEALTH_CACHE is not None and (now - _ROUTER_HEALTH_TS) < max_age_s:
+        return _ROUTER_HEALTH_CACHE
+
+    with _ROUTER_HEALTH_LOCK:
+        if _ROUTER_HEALTH_CACHE is not None and (now - _ROUTER_HEALTH_TS) < max_age_s:
+            return _ROUTER_HEALTH_CACHE
+
+        env_file = Path("/home/ajf/.hermes/.env")
+        keys = []
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if "=" in line and any(k in line for k in ["KEY", "TOKEN"]):
+                    val = line.split("=", 1)[1].strip().strip("\"'")
+                    if val and val not in keys:
+                        keys.append(val)
+
+        for port in [8045, 7836]:
+            for key in keys + [""]:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models")
+                if key:
+                    req.add_header("Authorization", f"Bearer {key}")
+                try:
+                    with urllib.request.urlopen(req, timeout=1.5) as r:
+                        data = json.loads(r.read().decode())
+                        models = data.get("data", [])
+                        res = {
+                            "status": "online",
+                            "port": port,
+                            "models_count": len(models),
+                            "checked_at": datetime.now().strftime("%H:%M:%S")
+                        }
+                        _ROUTER_HEALTH_CACHE = res
+                        _ROUTER_HEALTH_TS = time.time()
+                        return res
+                except Exception:
+                    pass
+
+        res = {
+            "status": "offline",
+            "port": 8045,
+            "models_count": 0,
+            "checked_at": datetime.now().strftime("%H:%M:%S")
+        }
+        _ROUTER_HEALTH_CACHE = res
+        _ROUTER_HEALTH_TS = time.time()
+        return res
+
+_SNAPSHOT_CACHE = None
+_SNAPSHOT_CACHE_TS = 0
+_SNAPSHOT_LOCK = threading.Lock()
+
+def invalidate_snapshot_cache():
+    global _SNAPSHOT_CACHE, _SNAPSHOT_CACHE_TS
+    with _SNAPSHOT_LOCK:
+        _SNAPSHOT_CACHE = None
+        _SNAPSHOT_CACHE_TS = 0
+
+def get_cached_system_snapshot(max_age_s: float = 2.5) -> dict:
+    global _SNAPSHOT_CACHE, _SNAPSHOT_CACHE_TS
+    now = time.time()
+    if _SNAPSHOT_CACHE is not None and (now - _SNAPSHOT_CACHE_TS) < max_age_s:
+        return _SNAPSHOT_CACHE
+    with _SNAPSHOT_LOCK:
+        if _SNAPSHOT_CACHE is not None and (now - _SNAPSHOT_CACHE_TS) < max_age_s:
+            return _SNAPSHOT_CACHE
+        _SNAPSHOT_CACHE = get_system_snapshot()
+        _SNAPSHOT_CACHE_TS = time.time()
+        return _SNAPSHOT_CACHE
 
 def compute_concurrency_diagnostics(repos, telemetry_data, governor_state, accounts):
     requested_max = 3

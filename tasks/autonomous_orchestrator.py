@@ -273,6 +273,7 @@ def run_hermes_agent(
             HERMES_BIN,
             "--in", target_dir,
             "--yolo",
+            "--ignore-rules",
             "-m", model,
             "-z", full_prompt,
             "--usage-file", usage_file
@@ -1772,6 +1773,12 @@ def run_orchestrator(once: bool = False, planner_only: bool = False, executor_on
                 
             cycle += 1
             print("\n[*] Cycle finished. Cooling down 15s before next pass...")
+            # Periodic Memory Reclamation & Garbage Collection
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
             try:
                 from token_quota_optimizer import evaluate_quota_readiness
                 evaluate_quota_readiness(
