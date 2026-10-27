@@ -47,9 +47,9 @@
 
     <!-- Live Telemetry Badges -->
     <div class="flex items-center gap-3">
-      <div id="badge-router" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium" title="Live LLM Gateway Status">
+      <div id="badge-router" onclick="openFleetHealthModal()" class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium transition hover:border-emerald-400/50" title="Click to inspect Live Fleet Health & Run Real Hermes Agent Smoke Test">
         <span id="router-pulse-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        <span id="router-status-text">LLM Router Checking...</span>
+        <span id="router-status-text">Fleet Health Checking...</span>
       </div>
       <div id="badge-agents" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-medium">
         <i class="fa-solid fa-robot"></i> <span id="agent-count">0 Agents Active</span>
@@ -89,9 +89,6 @@
     </button>
     <button onclick="switchTab('telemetry')" id="tab-btn-telemetry" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
       <i class="fa-solid fa-chart-line"></i> Agents & Token Telemetry
-    </button>
-    <button onclick="switchTab('accounts')" id="tab-btn-accounts" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
-      <i class="fa-solid fa-users"></i> 4 Google Pro Fleet
     </button>
     <button onclick="switchTab('bugfix')" id="tab-btn-bugfix" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
       <i class="fa-solid fa-bug text-rose-400"></i> Failed Tasks & Bugfix Queue
@@ -331,23 +328,6 @@
     </div>
 
     <!-- ================================================================= -->
-    <!-- TAB 3: 4 GOOGLE PRO ACCOUNTS STATUS                               -->
-    <!-- ================================================================= -->
-    <div id="tab-accounts" class="hidden space-y-6">
-      <div class="glass rounded-xl p-5 border border-slate-800">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
-            <i class="fa-solid fa-layer-group text-emerald-400"></i> 4 Google Pro Accounts Rotation Fleet
-          </h3>
-          <span class="text-xs text-slate-400">Local Router: http://127.0.0.1:8045</span>
-        </div>
-        <div id="accounts-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <!-- Populated via JS -->
-        </div>
-      </div>
-    </div>
-
-    <!-- ================================================================= -->
     <!-- TAB 4: LINKEDIN QUEUE                                             -->
     <!-- ================================================================= -->
     <div id="tab-linkedin" class="hidden space-y-6">
@@ -530,6 +510,82 @@
             Toggle Auto Loop
           </button>
           <button onclick="closeQuotaOptimizerModal()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Live Fleet Health & Real Hermes Agent Verification -->
+  <div id="modal-fleet-health" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass rounded-2xl border border-indigo-500/40 w-full max-w-2xl p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span id="fleet-modal-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-heart-pulse text-emerald-400"></i> Fleet Health & Token Flow Sentinel
+          </h3>
+        </div>
+        <button onclick="closeFleetHealthModal()" class="text-slate-400 hover:text-white transition">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- 3-Tier Health Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <!-- Tier 1: LLM Gateway -->
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">1. Gateway Router</span>
+            <span id="fleet-gw-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">ONLINE</span>
+          </div>
+          <p id="fleet-gw-details" class="text-xs text-slate-200 font-mono">Port :8045</p>
+          <p id="fleet-gw-models" class="text-[11px] text-slate-400">15 Models available</p>
+        </div>
+
+        <!-- Tier 2: Account Health -->
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">2. Account Pool</span>
+            <span id="fleet-acc-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">3 HEALTHY</span>
+          </div>
+          <p id="fleet-acc-details" class="text-xs text-slate-200">0 Quarantined</p>
+          <p id="fleet-acc-note" class="text-[11px] text-slate-400">Google Pro Cloud DB</p>
+        </div>
+
+        <!-- Tier 3: Hermes CLI Agent Smoke Test -->
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">3. Agent Smoke Test</span>
+            <span id="fleet-smoke-status" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300">PASSED</span>
+          </div>
+          <p id="fleet-smoke-details" class="text-xs text-slate-200 font-mono">PONG (8.6s)</p>
+          <p id="fleet-smoke-tested" class="text-[11px] text-slate-400">Real Token Flow Verified</p>
+        </div>
+      </div>
+
+      <!-- Live Smoke Test Output Log Box -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-semibold text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-terminal text-indigo-400"></i> Latest Hermes Agent Probe Result
+          </span>
+          <span id="fleet-probe-time" class="text-slate-500 font-mono text-[11px]"></span>
+        </div>
+        <div id="fleet-probe-box" class="p-3 rounded-lg bg-black/60 border border-slate-800 text-xs font-mono text-slate-300 overflow-x-auto max-h-36">
+          Loading fleet diagnostics...
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+        <span class="text-slate-400 text-[11px]">Probes run end-to-end Hermes CLI subprocess with actual tokens.</span>
+        <div class="flex items-center gap-2">
+          <button onclick="runFleetSmokeTest()" id="btn-run-smoke-test" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center gap-1.5">
+            <i class="fa-solid fa-bolt"></i> <span>Run Smoke Test Now</span>
+          </button>
+          <button onclick="closeFleetHealthModal()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition">
             Close
           </button>
         </div>
@@ -809,7 +865,7 @@
     let globalData = {};
 
     function switchTab(tabId) {
-      ['kanban', 'repos', 'telemetry', 'accounts', 'linkedin', 'bugfix'].forEach(t => {
+      ['kanban', 'repos', 'telemetry', 'bugfix', 'linkedin'].forEach(t => {
         const el = document.getElementById(`tab-${t}`);
         const btn = document.getElementById(`tab-btn-${t}`);
         if (el) el.classList.add('hidden');
@@ -895,7 +951,6 @@
         renderKanban();
         renderRepos();
         renderTelemetry();
-        renderAccounts();
         renderLinkedIn();
         renderBugfixQueue();
       } catch (e) {
@@ -1735,39 +1790,6 @@
           }).join('');
         }
       }
-    }
-
-    function renderAccounts() {
-      const accGrid = document.getElementById('accounts-grid');
-      accGrid.innerHTML = '';
-      (globalData.accounts || []).forEach((acc, idx) => {
-        accGrid.innerHTML += `
-          <div class="p-4 rounded-xl bg-slate-800/60 border border-slate-700/80 space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-slate-200 truncate w-32">${acc.email.split('@')[0]}</span>
-              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
-            </div>
-            <div>
-              <div class="flex justify-between text-[11px] mb-1 text-slate-400">
-                <span>5-Hour Quota</span>
-                <span class="font-mono text-emerald-400 font-bold">${acc.gemini_5h_percent}%</span>
-              </div>
-              <div class="w-full h-1.5 rounded-full bg-slate-700 overflow-hidden">
-                <div class="h-full bg-emerald-500 rounded-full" style="width: ${acc.gemini_5h_percent}%"></div>
-              </div>
-            </div>
-            <div>
-              <div class="flex justify-between text-[11px] mb-1 text-slate-400">
-                <span>Weekly Quota</span>
-                <span class="font-mono text-indigo-400 font-bold">${acc.gemini_weekly_percent}%</span>
-              </div>
-              <div class="w-full h-1.5 rounded-full bg-slate-700 overflow-hidden">
-                <div class="h-full bg-indigo-500 rounded-full" style="width: ${acc.gemini_weekly_percent}%"></div>
-              </div>
-            </div>
-          </div>
-        `;
-      });
     }
 
     function renderLinkedIn() {
