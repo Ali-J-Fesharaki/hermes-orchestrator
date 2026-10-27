@@ -252,19 +252,18 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_clear_agents(self):
+        pruned_count = 0
         try:
-            from telemetry import load_telemetry, save_telemetry
-            data = load_telemetry()
-            data["active_agents"] = {}
-            data["recent_events"] = [f"[{datetime.now().strftime('%H:%M:%S')}] Manually cleared active agent sessions via Control Center"] + data.get("recent_events", [])[:15]
-            save_telemetry(data)
+            from telemetry import clean_stale_agents
+            # Safe pruning: Never touches processes actively running on the OS!
+            pruned_count = clean_stale_agents(max_age_seconds=600, force=False)
         except Exception:
             pass
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(b'{"status": "ok", "cleared": true}')
+        self.wfile.write(json.dumps({"status": "ok", "cleared": True, "pruned": pruned_count}).encode("utf-8"))
 
     def handle_card_ai_refine(self, payload):
         repo_id = payload.get("repo_id", "phd_proposal")

@@ -833,6 +833,21 @@ def reconcile_ghost_in_progress_tasks(repos: list, repos_lock=None) -> int:
                 # If marked in_progress but no agent is actively executing it
                 if st == "in_progress" or gh_col == "In progress":
                     if not any(m_name in at for at in active_agent_tasks):
+                        # Verify whether a live hermes process is actively executing in this repository
+                        repo_dir_str = str(repo.get("path", ""))
+                        is_proc_alive = False
+                        if repo_dir_str:
+                            try:
+                                chk = subprocess.run(["pgrep", "-a", "-f", f"hermes.*{repo_dir_str}"], capture_output=True, text=True)
+                                if chk.returncode == 0 and chk.stdout.strip():
+                                    is_proc_alive = True
+                            except Exception:
+                                pass
+                        
+                        if is_proc_alive:
+                            # Hermes process is actively executing! Do NOT demote!
+                            continue
+
                         is_appr = bool(m.get("approved_for_auto_run", False))
                         target_status = "ready" if is_appr else "pending"
                         target_gh = "Ready" if is_appr else "Backlog"
@@ -1074,6 +1089,33 @@ def trigger_failure_replanning(target_repo: dict, failed_milestone: dict, failur
         telemetry.unregister_agent(agent_id)
         sync_dashboards()
 
+def extract_code_artifact(raw_text: str, target_rel: str) -> str:
+    """
+    Robustly extracts source code or LaTeX artifact from model response.
+    Never truncates on internal docstring markdown fences.
+    """
+    if not raw_text or not isinstance(raw_text, str):
+        return ""
+    text = raw_text.strip()
+    if "```" not in text:
+        return text
+
+    lines = text.splitlines()
+    first_fence_idx = None
+    last_fence_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            if first_fence_idx is None:
+                first_fence_idx = idx
+            last_fence_idx = idx
+
+    if first_fence_idx is not None and last_fence_idx is not None and last_fence_idx > first_fence_idx:
+        extracted = "\n".join(lines[first_fence_idx + 1:last_fence_idx]).strip()
+        if len(extracted) > 100:
+            return extracted
+
+    return text
+
 # ==============================================================================
 # ⚡ PRIORITIZED EXECUTOR ENGINE (GEMINI 3.8 FLASH TIERED - CONCURRENT WORKERS)
 # ==============================================================================
@@ -1208,11 +1250,7 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
             execution_failed = True
             failure_reason = "Model returned empty or non-string response."
         else:
-            clean_content = content.strip()
-            for fence in ["```latex", "```tex", "```python", "```cpp", "```javascript", "```markdown", "```"]:
-                if fence in clean_content:
-                    clean_content = clean_content.split(fence, 1)[1].split("```", 1)[0].strip()
-                    break
+            clean_content = extract_code_artifact(content, str(target_rel))
 
             # Guard against writing error messages or tool artifacts to source files
             error_keywords = [
@@ -1235,8 +1273,22 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
         if not execution_failed:
             out_file = repo_path / target_rel
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            out_file.write_text(clean_content, encoding="utf-8")
-            print(f"[+] [{repo_name}] Written {len(clean_content)} chars to {out_file}")
+
+            # Check if Hermes Agent already created/wrote a valid file on disk via its tools
+            agent_already_wrote_valid_file = False
+            if out_file.exists() and out_file.stat().st_size > 500:
+                if out_file.suffix == ".py":
+                    chk = subprocess.run(["python3", "-m", "py_compile", str(out_file)], capture_output=True)
+                    if chk.returncode == 0:
+                        agent_already_wrote_valid_file = True
+                elif out_file.suffix == ".tex":
+                    agent_already_wrote_valid_file = True
+
+            if not agent_already_wrote_valid_file:
+                out_file.write_text(clean_content, encoding="utf-8")
+                print(f"[+] [{repo_name}] Written {len(clean_content)} chars to {out_file}")
+            else:
+                print(f"[+] [{repo_name}] Valid artifact already authored on disk ({out_file.stat().st_size} bytes). Preserving agent file.")
             
             # Post-Processing & Robust Validation
             if is_persian_latex and out_file.suffix == ".tex":

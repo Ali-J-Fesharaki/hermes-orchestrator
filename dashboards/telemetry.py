@@ -13,6 +13,7 @@ import os
 import json
 import time
 import threading
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -87,18 +88,42 @@ def update_agent_session(agent_id: str, hermes_session_id: str):
         data["active_agents"][agent_id]["hermes_session_id"] = hermes_session_id
         save_telemetry(data)
 
-def clean_stale_agents(max_age_seconds: int = 600) -> int:
-    """Removes ghost / abandoned agents that ran longer than max_age_seconds."""
+def is_task_actively_running_on_os(repo_id: str, task_name: str) -> bool:
+    """Checks whether an actual Hermes CLI process is actively running for this repository."""
+    try:
+        out = subprocess.run(["pgrep", "-a", "-f", "hermes.*--in"], capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            if repo_id and repo_id in line:
+                return True
+            if task_name and task_name[:20].lower() in line.lower():
+                return True
+    except Exception:
+        pass
+    return False
+
+def clean_stale_agents(max_age_seconds: int = 1500, force: bool = False) -> int:
+    """
+    Safely removes ghost / abandoned agents from telemetry.
+    CRITICAL: Never removes an agent if its underlying Hermes subprocess is actively running on the OS!
+    """
     data = load_telemetry()
     now = time.time()
     stale_ids = []
     for aid, a in data.get("active_agents", {}).items():
         start_ts = a.get("start_ts", 0)
-        if (now - start_ts) > max_age_seconds:
+        repo_id = a.get("repo_id", "")
+        task_name = a.get("current_task", "")
+        
+        # Process is actively running on OS — DO NOT prune!
+        if not force and is_task_actively_running_on_os(repo_id, task_name):
+            continue
+
+        if force or (now - start_ts) > max_age_seconds:
             stale_ids.append(aid)
+
     for aid in stale_ids:
         agent = data["active_agents"].pop(aid)
-        event = f"[{datetime.now().strftime('%H:%M:%S')}] Auto-pruned stale agent session '{aid}' ({agent.get('role', 'Agent')})"
+        event = f"[{datetime.now().strftime('%H:%M:%S')}] Pruned orphaned agent session '{aid}' ({agent.get('role', 'Agent')})"
         data["recent_events"] = [event] + data.get("recent_events", [])[:15]
     if stale_ids:
         save_telemetry(data)
