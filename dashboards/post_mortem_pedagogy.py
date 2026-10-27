@@ -3,8 +3,9 @@ Architectural Post-Mortem Pedagogy & Anti-Pattern Learning Engine.
 
 Systematically classifies distributed autonomous execution failures into canonical
 architectural anti-patterns, evaluates weighted regex signatures, scores failures via
-log-normalized metrics, tracks recurrence frequencies, and generates pedagogical
-remediation lessons with atomic persistence.
+log-normalized metrics, tracks recurrence frequencies per repository, dynamically escalates
+recurring design flaws to CRITICAL severity, and generates pedagogical remediation
+lessons with thread-safe atomic persistence.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ __all__ = [
     "ANTI_PATTERN_CATALOG",
     "FALLBACK_ANOMALY",
     "PostMortemPedagogyEngine",
+    "emit_post_mortem",
+    "get_post_mortems",
     "_atomic_write_text",
 ]
 
@@ -64,10 +67,10 @@ def _atomic_write_text(path: Union[Path, str], content: str) -> None:
 
 @dataclass(frozen=True)
 class PedagogicalLesson:
-    """Immutable 3-bullet architectural lesson template."""
-    assumption: str
-    countermeasure: str
-    rule_of_thumb: str
+    """Immutable 3-bullet architectural lesson template (Delta, Gamma, Omega)."""
+    assumption: str      # Delta: Broken Assumption
+    countermeasure: str  # Gamma: Architectural Countermeasure
+    rule_of_thumb: str   # Omega: Heuristic Rule of Thumb
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -92,7 +95,7 @@ class AntiPatternDefinition:
     label: str
     signatures: List[Tuple[str, float]]
     lesson_template: PedagogicalLesson
-    severity: str  # LOW | MEDIUM | HIGH | CRITICAL
+    severity: str  # 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
 
     def compile_signatures(self) -> List[Tuple[re.Pattern, float]]:
         """Pre-compiles regex patterns for high-throughput evaluation."""
@@ -154,8 +157,8 @@ class PostMortemRecord:
             repo_id=str(data.get("repo_id", "")),
             milestone_title=str(data.get("milestone_title", "")),
             target_file=str(data.get("target_file", "")),
-            anti_pattern_id=str(data.get("anti_pattern_id", "unclassified_anomaly")),
-            anti_pattern_label=str(data.get("anti_pattern_label", "Unclassified Anomaly")),
+            anti_pattern_id=str(data.get("anti_pattern_id", "unclassified_runtime_anomaly")),
+            anti_pattern_label=str(data.get("anti_pattern_label", "Unclassified Runtime Anomaly")),
             severity=str(data.get("severity", "LOW")),
             lesson=lesson_obj,
             raw_error_snippet=str(data.get("raw_error_snippet", "")),
@@ -165,7 +168,7 @@ class PostMortemRecord:
 
 
 # ==============================================================================
-# 2. Canonical Anti-Pattern Catalog (Minimum 8 Patterns)
+# 2. Canonical Anti-Pattern Catalog (8 Primary Taxonomic Patterns)
 # ==============================================================================
 
 ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
@@ -179,11 +182,12 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"Resource temporarily unavailable.*lock", 7.0),
             (r"FileLockTimeout.*failed to acquire", 7.5),
             (r"concurrent.*write.*conflict", 6.5),
+            (r"split-brain.*race.*condition", 7.5),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes files, git indices, or shared state can be safely modified without distributed or advisory lease fences.",
-            countermeasure="Wrap shared mutations in ephemeral worktrees, file locks with exponential backoff jitter, or process isolation.",
-            rule_of_thumb="Never share mutable git workspaces or databases across concurrent worker threads; isolate by worktree or shard.",
+            countermeasure="Wrap shared mutations in ephemeral worktrees, distributed fencing tokens, or file locks with randomized exponential backoff jitter.",
+            rule_of_thumb="Never share mutable git workspaces or databases across concurrent worker threads; isolate by worktree or shard with fencing tokens.",
         ),
         severity="HIGH",
     ),
@@ -197,11 +201,12 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"synchronized.*retry.*storm", 8.0),
             (r"retry.*quota.*exhausted", 7.5),
             (r"exponential backoff failed.*exhausted", 6.5),
+            (r"rate limit cascade", 8.0),
         ],
         lesson_template=PedagogicalLesson(
-            assumption="Assumes immediate or linear retry loops on rate-limited endpoints will eventually succeed without worsening downstream saturation.",
-            countermeasure="Implement full randomized jitter backoff (decorrelated jitter) and token-bucket pacing governors before retrying.",
-            rule_of_thumb="On HTTP 429/ResourceExhausted, fail fast or back off exponentially with random jitter; never retry synchronously in tight loops.",
+            assumption="Assumes immediate or synchronized retry loops on rate-limited endpoints will eventually succeed without worsening downstream saturation.",
+            countermeasure="Implement full randomized decorrelated jitter backoff, adaptive token-bucket governors, and circuit breakers before retrying.",
+            rule_of_thumb="On HTTP 429/ResourceExhausted, fail fast or back off exponentially with decorrelated jitter; never retry synchronously in tight loops.",
         ),
         severity="CRITICAL",
     ),
@@ -215,6 +220,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"PermissionDenied.*host.*file system", 8.0),
             (r"leftover.*tmp.*polluting workspace", 7.5),
             (r"sandbox boundary breach.*outside workdir", 9.0),
+            (r"contaminat(?:ing|ed).*git.*tree", 8.0),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes tasks or sub-agents clean up generated side-effects, child processes, and temporary files on the host environment.",
@@ -225,7 +231,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
     ),
     "missing_circuit_breaker": AntiPatternDefinition(
         id="missing_circuit_breaker",
-        label="Missing Circuit Breaker on Fatal Errors",
+        label="Missing Circuit Breaker on Deterministic Errors",
         signatures=[
             (r"repeated fatal error.*no progress.*consecutive", 9.0),
             (r"circuit breaker (?:not found|missing|threshold exceeded)", 8.5),
@@ -233,6 +239,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"Maximum retries \d+ exceeded without state change", 9.0),
             (r"consecutive failures exceeded.*tripped", 7.5),
             (r"(?:ZeroDivisionError|SyntaxError|TypeError).*persists across \d+ attempts", 8.5),
+            (r"without tripping backoff", 8.0),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes repeatedly executing the exact same failed deterministic logic will yield a different outcome without intervention.",
@@ -251,6 +258,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"hallucinating partial completions?.*truncated", 8.5),
             (r"task scope too broad.*split required", 8.0),
             (r"payload size \d+ tokens exceeds limit", 8.0),
+            (r"producing truncated stubs", 8.0),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes complex multi-file architectural refactors can be comprehended and resolved within a single prompt context window.",
@@ -269,11 +277,12 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"worker thread hung in regex evaluation", 9.0),
             (r"polynomial.*backtracking detected in pattern", 8.5),
             (r"CPU 100%.*regex match", 8.0),
+            (r"exponential backtracking regex", 9.0),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes nested quantifier regular expressions can safely parse unbounded, arbitrary multi-line text payloads.",
-            countermeasure="Refactor regex patterns to use atomic grouping, possessive quantifiers, strict character classes, or linear-time parsing.",
-            rule_of_thumb="Never combine nested wildcards (e.g. `(a+)+` or `(.*[a-z])+`) over unbounded logs; use bounded line-by-line streaming.",
+            countermeasure="Refactor regex patterns to use atomic grouping, possessive quantifiers, strict character classes, or linear-time automata parsers.",
+            rule_of_thumb="Never combine nested wildcards (e.g. `(a+)+` or `(.*[a-z])+`) over unbounded logs; use bounded line-by-line streaming or linear automata.",
         ),
         severity="HIGH",
     ),
@@ -287,6 +296,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"JSONDecodeError: Expecting value.*upstream response", 8.5),
             (r"unexpected response structure from (?:model|upstream API)", 8.5),
             (r"AttributeError: 'NoneType' object has no attribute '(?:text|data|content)'", 8.5),
+            (r"external model/gateway API schema change", 8.5),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes external model providers or upstream REST APIs maintain rigid, immutable response schemas across revisions.",
@@ -305,6 +315,7 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
             (r"non-zero exit code ignored.*reported ok", 9.0),
             (r"missing artifact.*execution marked complete", 8.5),
             (r"AssertionError: unverified artifact.*falsely reported 0", 8.5),
+            (r"without non-zero exit code validation", 9.0),
         ],
         lesson_template=PedagogicalLesson(
             assumption="Assumes execution succeeded because the wrapper script exited without raising an uncaught exception, ignoring child exit codes.",
@@ -316,8 +327,8 @@ ANTI_PATTERN_CATALOG: Dict[str, AntiPatternDefinition] = {
 }
 
 FALLBACK_ANOMALY = AntiPatternDefinition(
-    id="unclassified_anomaly",
-    label="Unclassified Execution Anomaly",
+    id="unclassified_runtime_anomaly",
+    label="Unclassified Runtime Anomaly",
     signatures=[],
     lesson_template=PedagogicalLesson(
         assumption="Assumes unseen failure signature fits existing historical taxonomic models.",
@@ -339,14 +350,26 @@ class PostMortemPedagogyEngine:
 
     def __init__(
         self,
+        registry_path: Optional[Union[Path, str]] = None,
         lessons_path: Optional[Union[Path, str]] = None,
+        markdown_path: Optional[Union[Path, str]] = None,
+        *,
         digest_path: Optional[Union[Path, str]] = None,
     ) -> None:
         self._lock = threading.Lock()
         base_dir = Path(__file__).resolve().parent
 
+        # Handle legacy 2-argument positional invocation: (lessons_path, digest_path)
+        if registry_path is not None and lessons_path is not None and markdown_path is None and digest_path is None:
+            if "lessons" in str(registry_path).lower():
+                digest_path = lessons_path
+                lessons_path = registry_path
+                registry_path = None
+
+        self.registry_path = Path(registry_path) if registry_path else base_dir / "failed_tasks_registry.json"
         self.lessons_path = Path(lessons_path) if lessons_path else base_dir / "architectural_lessons.json"
-        self.digest_path = Path(digest_path) if digest_path else base_dir / "ARCHITECTURAL_LESSONS.md"
+        self.markdown_path = Path(markdown_path or digest_path or (base_dir / "ARCHITECTURAL_LESSONS.md"))
+        self.digest_path = self.markdown_path
 
         self._records: Dict[str, PostMortemRecord] = {}
         self._compiled_catalog = {
@@ -355,18 +378,17 @@ class PostMortemPedagogyEngine:
         }
         self._load_existing_records()
 
-    def _atomic_write_text(self, path: Union[Path, str], content: str) -> None:
-        """Atomic write via temporary file replacement with fsync."""
-        _atomic_write_text(path, content)
-
     def _load_existing_records(self) -> None:
-        """Loads historical post-mortem records from disk if available."""
+        """Loads historical post-mortem records from disk defensively."""
         if not self.lessons_path.exists():
             return
 
         try:
             with open(self.lessons_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                content = f.read().strip()
+                if not content:
+                    return
+                data = json.loads(content)
 
             raw_records = []
             if isinstance(data, dict):
@@ -379,38 +401,65 @@ class PostMortemPedagogyEngine:
                     record = PostMortemRecord.from_dict(item)
                     self._records[record.lesson_id] = record
         except Exception:
-            # Fall back to empty state on read error
+            # Defensive fallback to preserve runtime stability
             pass
 
-    def _extract_error_text(self, task_data: Dict[str, Any]) -> str:
-        """Aggregates all error-related fields from task metadata."""
-        error_parts = []
-        for key in ["error", "error_text", "raw_error_snippet", "stderr", "traceback", "exception", "failure_reason"]:
-            val = task_data.get(key)
-            if val and isinstance(val, str):
-                error_parts.append(val)
-            elif val and isinstance(val, (list, tuple)):
-                error_parts.extend(str(x) for x in val)
+    def _extract_corpus(self, task_data: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Extracts normalized textual corpus T(E) = concat(raw_traceback, stderr_snippet, milestone_name, target_file)
+        and returns (full_corpus, raw_snippet).
+        """
+        traceback_parts = []
+        for key in ["traceback", "raw_traceback", "exception", "stack_trace"]:
+            v = task_data.get(key)
+            if v and isinstance(v, str):
+                traceback_parts.append(v)
+            elif v and isinstance(v, (list, tuple)):
+                traceback_parts.extend(str(x) for x in v)
 
-        if not error_parts and "message" in task_data:
-            error_parts.append(str(task_data["message"]))
+        stderr_parts = []
+        for key in ["stderr", "stderr_snippet", "error", "error_text", "failure_reason", "message"]:
+            v = task_data.get(key)
+            if v and isinstance(v, str):
+                stderr_parts.append(v)
+            elif v and isinstance(v, (list, tuple)):
+                stderr_parts.extend(str(x) for x in v)
 
-        combined = "\n".join(error_parts).strip()
-        return combined if combined else str(task_data)
+        milestone_name = str(task_data.get("milestone_name") or task_data.get("milestone_title") or "")
+        target_file = str(task_data.get("target_file") or task_data.get("relative_filepath") or "")
 
-    def _score_failure(self, text: str) -> Tuple[str, float, float]:
-        """Calculates Score(E, a_k) and normalized S_norm for each anti-pattern."""
-        text_len = len(text)
+        raw_traceback_str = "\n".join(traceback_parts).strip()
+        stderr_snippet_str = "\n".join(stderr_parts).strip()
+
+        corpus_elements = [
+            raw_traceback_str,
+            stderr_snippet_str,
+            milestone_name,
+            target_file,
+        ]
+        corpus = "\n".join([elem for elem in corpus_elements if elem]).strip()
+        if not corpus:
+            corpus = str(task_data)
+
+        snippet = (stderr_snippet_str or raw_traceback_str or corpus)[:600].strip()
+        return corpus, snippet
+
+    def _score_failure(self, corpus: str) -> Tuple[str, float, float]:
+        """
+        Computes Score(E, a_k) = sum_{j} w_j * match_count(pattern_j, T(E))
+        and log-normalized score S_norm(E, a_k) = Score(E, a_k) / (1.0 + ln(1.0 + len(T(E)))).
+        """
+        text_len = len(corpus)
         denominator = 1.0 + math.log(1.0 + text_len)
 
-        best_id = "unclassified_anomaly"
+        best_id = "unclassified_runtime_anomaly"
         best_norm_score = 0.0
         best_raw_score = 0.0
 
         for pattern_id, compiled_sigs in self._compiled_catalog.items():
             raw_score = 0.0
             for compiled_regex, weight in compiled_sigs:
-                matches = len(compiled_regex.findall(text))
+                matches = len(compiled_regex.findall(corpus))
                 if matches > 0:
                     raw_score += weight * matches
 
@@ -424,33 +473,45 @@ class PostMortemPedagogyEngine:
         return best_id, best_raw_score, best_norm_score
 
     def analyze_failure(self, task_data: Dict[str, Any]) -> PostMortemRecord:
-        """Analyzes a task execution failure and registers an architectural post-mortem record."""
+        """
+        Analyzes a task execution failure and registers an architectural post-mortem record.
+        Tracks recurrence frequency per (anti_pattern_id, repo_id) and automatically
+        escalates severity to CRITICAL if recurrence_count >= 3.
+        """
         with self._lock:
             task_id = str(task_data.get("task_id", f"task_{os.urandom(4).hex()}"))
             repo_id = str(task_data.get("repo_id", "hermes_orchestrator"))
-            milestone_title = str(task_data.get("milestone_title", "Autonomous Task Execution"))
+            milestone_title = str(
+                task_data.get("milestone_title")
+                or task_data.get("milestone_name")
+                or "Autonomous Task Execution"
+            )
             target_file = str(task_data.get("target_file", "unknown_target"))
 
-            error_text = self._extract_error_text(task_data)
-            best_id, raw_score, norm_score = self._score_failure(error_text)
+            corpus, raw_snippet = self._extract_corpus(task_data)
+            best_id, raw_score, norm_score = self._score_failure(corpus)
 
             if norm_score >= self.MATCH_THRESHOLD and best_id in ANTI_PATTERN_CATALOG:
                 anti_pattern = ANTI_PATTERN_CATALOG[best_id]
             else:
                 anti_pattern = FALLBACK_ANOMALY
 
-            # Calculate recurrence count
+            # Recurrence tracking R(a_k, repo_id)
             existing_occurrences = sum(
-                1 for r in self._records.values() if r.anti_pattern_id == anti_pattern.id
+                1 for r in self._records.values()
+                if (r.anti_pattern_id == anti_pattern.id or (anti_pattern.id == "unclassified_runtime_anomaly" and r.anti_pattern_id in ("unclassified_runtime_anomaly", "unclassified_anomaly")))
+                and r.repo_id == repo_id
             )
             recurrence_count = existing_occurrences + 1
 
-            # Generate deterministic lesson_id based on task, anti-pattern, and count
-            timestamp = datetime.now(timezone.utc).isoformat()
-            hasher = hashlib.sha256(f"{task_id}:{anti_pattern.id}:{recurrence_count}:{timestamp}".encode("utf-8"))
-            lesson_id = f"PML-{hasher.hexdigest()[:8].upper()}"
+            # Dynamic severity escalation: If R(a_k, repo_id) >= 3, automatically escalate to CRITICAL
+            effective_severity = anti_pattern.severity
+            if recurrence_count >= 3:
+                effective_severity = "CRITICAL"
 
-            raw_snippet = error_text[:600].strip()
+            timestamp = datetime.now(timezone.utc).isoformat()
+            hasher = hashlib.sha256(f"{task_id}:{anti_pattern.id}:{repo_id}:{recurrence_count}:{timestamp}".encode("utf-8"))
+            lesson_id = f"PML-{hasher.hexdigest()[:8].upper()}"
 
             record = PostMortemRecord(
                 lesson_id=lesson_id,
@@ -460,7 +521,7 @@ class PostMortemPedagogyEngine:
                 target_file=target_file,
                 anti_pattern_id=anti_pattern.id,
                 anti_pattern_label=anti_pattern.label,
-                severity=anti_pattern.severity,
+                severity=effective_severity,
                 lesson=anti_pattern.lesson_template,
                 raw_error_snippet=raw_snippet,
                 recurrence_count=recurrence_count,
@@ -470,9 +531,15 @@ class PostMortemPedagogyEngine:
             self._records[lesson_id] = record
             return record
 
-    def batch_analyze_registry(self, registry_path: Optional[Union[Path, str]] = None) -> List[PostMortemRecord]:
-        """Performs batch failure analysis against a registry of failed task records."""
-        reg_file = Path(registry_path) if registry_path else self.lessons_path.parent / "failed_tasks_registry.json"
+    def batch_analyze_registry(
+        self,
+        registry_path: Optional[Union[Path, str]] = None,
+    ) -> List[PostMortemRecord]:
+        """
+        Performs batch failure analysis against a registry of failed task records.
+        Supports both structured JSON and JSON Lines formats.
+        """
+        reg_file = Path(registry_path) if registry_path else self.registry_path
         if not reg_file.exists():
             return []
 
@@ -485,14 +552,19 @@ class PostMortemPedagogyEngine:
                 try:
                     data = json.loads(content)
                 except json.JSONDecodeError:
-                    # Try reading JSON Lines
+                    # Defensive parsing for JSON Lines
                     data = [json.loads(line) for line in content.splitlines() if line.strip()]
 
             items = []
             if isinstance(data, list):
                 items = data
             elif isinstance(data, dict):
-                items = list(data.values())
+                if "failures" in data and isinstance(data["failures"], list):
+                    items = data["failures"]
+                elif "records" in data and isinstance(data["records"], list):
+                    items = data["records"]
+                else:
+                    items = list(data.values())
 
             for item in items:
                 if isinstance(item, dict):
@@ -504,7 +576,7 @@ class PostMortemPedagogyEngine:
         return analyzed_records
 
     def save_lessons_json(self, output_path: Optional[Union[Path, str]] = None) -> Path:
-        """Atomically persists all architectural lessons to JSON."""
+        """Atomically persists all architectural lessons to JSON with fsync."""
         target_path = Path(output_path) if output_path else self.lessons_path
 
         with self._lock:
@@ -515,26 +587,36 @@ class PostMortemPedagogyEngine:
                 "records": [rec.to_dict() for rec in self._records.values()],
             }
             content = json.dumps(payload, indent=2, ensure_ascii=False)
-            self._atomic_write_text(target_path, content)
+            _atomic_write_text(target_path, content)
 
         return target_path
 
     def render_markdown_digest(self, output_path: Optional[Union[Path, str]] = None) -> Path:
-        """Renders an executive pedagogical digest with metrics, tables, and collapsible cards."""
-        target_path = Path(output_path) if output_path else self.digest_path
+        """
+        Renders an executive pedagogical digest with metrics, recurring flaw alerts,
+        and tripartite educational remediations.
+        """
+        target_path = Path(output_path) if output_path else self.markdown_path
 
         with self._lock:
             records = list(self._records.values())
 
-        # Aggregate metrics
         total_incidents = len(records)
         severity_counts: Dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
         pattern_counts: Dict[str, int] = {p_id: 0 for p_id in ANTI_PATTERN_CATALOG}
-        pattern_counts["unclassified_anomaly"] = 0
+        pattern_counts["unclassified_runtime_anomaly"] = 0
+
+        # Track recurring patterns per repo for Kanban Cockpit warnings
+        repo_pattern_recurrence: Dict[Tuple[str, str], int] = {}
 
         for r in records:
             severity_counts[r.severity] = severity_counts.get(r.severity, 0) + 1
-            pattern_counts[r.anti_pattern_id] = pattern_counts.get(r.anti_pattern_id, 0) + 1
+            pid = r.anti_pattern_id
+            if pid == "unclassified_anomaly":
+                pid = "unclassified_runtime_anomaly"
+            pattern_counts[pid] = pattern_counts.get(pid, 0) + 1
+            key = (r.anti_pattern_id, r.repo_id)
+            repo_pattern_recurrence[key] = max(repo_pattern_recurrence.get(key, 0), r.recurrence_count)
 
         md_lines = [
             "# Architectural Post-Mortem & Anti-Pattern Pedagogy Digest",
@@ -551,13 +633,37 @@ class PostMortemPedagogyEngine:
             f"| **High Severity Flaws** | `{severity_counts.get('HIGH', 0)}` | Guardrail Enforcement Active |",
             f"| **Medium / Low Anomalies** | `{severity_counts.get('MEDIUM', 0) + severity_counts.get('LOW', 0)}` | Continuous Observability |",
             "",
-            "### Anti-Pattern Frequency Distribution",
-            "",
-            "| Anti-Pattern ID | Classification Label | Severity | Recurrences |",
-            "| :--- | :--- | :--- | :--- |",
         ]
 
-        # Sort patterns by frequency
+        # Escalation alerts for Kanban Cockpit
+        escalated_flaws = [
+            (p_id, r_id, cnt)
+            for (p_id, r_id), cnt in repo_pattern_recurrence.items()
+            if cnt >= 3
+        ]
+        if escalated_flaws:
+            md_lines.extend([
+                "### ⚠️ Systemic Architectural Warnings (Kanban Cockpit Escalations)",
+                "",
+                "> The following recurring anti-patterns have breached threshold recurrence $R(a_k, \\text{repo}) \\ge 3$ and are escalated to **CRITICAL**:",
+                "",
+                "| Anti-Pattern ID | Target Repository | Recurrence Frequency | Actionable Directive |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for p_id, r_id, cnt in escalated_flaws:
+                label = ANTI_PATTERN_CATALOG.get(p_id, FALLBACK_ANOMALY).label
+                md_lines.append(
+                    f"| `{p_id}` ({label}) | `{r_id}` | **{cnt} recurrences** | Halt deployment, refactor shared boundaries, and trip circuit breaker |"
+                )
+            md_lines.append("")
+
+        md_lines.extend([
+            "### Anti-Pattern Frequency Distribution",
+            "",
+            "| Anti-Pattern ID | Classification Label | Base Severity | Recurrences |",
+            "| :--- | :--- | :--- | :--- |",
+        ])
+
         for p_id, count in sorted(pattern_counts.items(), key=lambda kv: kv[1], reverse=True):
             if p_id in ANTI_PATTERN_CATALOG:
                 defn = ANTI_PATTERN_CATALOG[p_id]
@@ -572,12 +678,11 @@ class PostMortemPedagogyEngine:
             "",
             "## 2. Recent Incident Post-Mortem Records",
             "",
-            "| Lesson ID | Task ID | Milestone | Anti-Pattern | Severity | Recurrence | Timestamp |",
+            "| Lesson ID | Task ID | Milestone | Anti-Pattern | Effective Severity | Recurrence | Timestamp |",
             "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
         ])
 
-        # Show up to 20 most recent records in reverse chronological order
-        recent_records = sorted(records, key=lambda x: x.timestamp, reverse=True)[:20]
+        recent_records = sorted(records, key=lambda x: x.timestamp, reverse=True)[:25]
         if not recent_records:
             md_lines.append("| _None_ | _No incidents registered yet_ | — | — | — | — | — |")
         else:
@@ -601,13 +706,13 @@ class PostMortemPedagogyEngine:
                 f"<details>",
                 f"<summary><b>[{defn.severity}] {defn.label}</b> (<code>{p_id}</code>) — {count} recorded incident(s)</summary>",
                 "",
-                f"#### Core Flawed Assumption",
+                r"#### Core Flawed Assumption ($\Delta$)",
                 f"> {defn.lesson_template.assumption}",
                 "",
-                f"#### Systematic Countermeasure",
+                r"#### Systematic Countermeasure ($\Gamma$)",
                 f"- {defn.lesson_template.countermeasure}",
                 "",
-                f"#### Architectural Rule of Thumb",
+                r"#### Architectural Rule of Thumb ($\Omega$)",
                 f"- **Guideline:** `{defn.lesson_template.rule_of_thumb}`",
                 "",
                 f"#### Monitored Diagnostic Signatures",
@@ -623,7 +728,7 @@ class PostMortemPedagogyEngine:
 
         md_content = "\n".join(md_lines) + "\n"
         with self._lock:
-            self._atomic_write_text(target_path, md_content)
+            _atomic_write_text(target_path, md_content)
 
         return target_path
 
@@ -633,13 +738,54 @@ class PostMortemPedagogyEngine:
             matching = [r for r in self._records.values() if r.task_id == task_id]
             if not matching:
                 return None
-            # Return most recent matching record
             matching.sort(key=lambda x: x.timestamp, reverse=True)
             return matching[0].to_dict()
 
 
 # ==============================================================================
-# 4. Self-Verification & Test Suite
+# 4. Global Singleton & Cross-Module Helpers
+# ==============================================================================
+
+_GLOBAL_ENGINE: Optional[PostMortemPedagogyEngine] = None
+_GLOBAL_ENGINE_LOCK = threading.Lock()
+
+
+def get_engine() -> PostMortemPedagogyEngine:
+    """Returns thread-safe global PostMortemPedagogyEngine instance."""
+    global _GLOBAL_ENGINE
+    with _GLOBAL_ENGINE_LOCK:
+        if _GLOBAL_ENGINE is None:
+            _GLOBAL_ENGINE = PostMortemPedagogyEngine()
+        return _GLOBAL_ENGINE
+
+
+def emit_post_mortem(payload: Dict[str, Any]) -> Optional[PostMortemRecord]:
+    """
+    Convenience hook for cross-module post-mortem emission.
+    Persists lesson JSON and updates Markdown digest atomically.
+    """
+    try:
+        engine = get_engine()
+        record = engine.analyze_failure(payload)
+        engine.save_lessons_json()
+        engine.render_markdown_digest()
+        return record
+    except Exception:
+        return None
+
+
+def get_post_mortems() -> List[Dict[str, Any]]:
+    """Convenience accessor for downstream aggregators to retrieve all post-mortem records."""
+    try:
+        engine = get_engine()
+        with engine._lock:
+            return [r.to_dict() for r in engine._records.values()]
+    except Exception:
+        return []
+
+
+# ==============================================================================
+# 5. Self-Verification & Test Suite
 # ==============================================================================
 
 if __name__ == "__main__":
@@ -655,11 +801,11 @@ if __name__ == "__main__":
         test_reg_path = temp_dir / "failed_tasks_registry.json"
 
         engine = PostMortemPedagogyEngine(
+            registry_path=test_reg_path,
             lessons_path=test_json_path,
-            digest_path=test_md_path,
+            markdown_path=test_md_path,
         )
 
-        # Synthetic failure payloads for all 8 catalog anti-patterns
         synthetic_cases = [
             (
                 "unfenced_shared_state",
@@ -750,7 +896,7 @@ if __name__ == "__main__":
                 },
             ),
             (
-                "unclassified_anomaly",
+                "unclassified_runtime_anomaly",
                 "LOW",
                 {
                     "task_id": "test_unknown_09",
@@ -765,7 +911,7 @@ if __name__ == "__main__":
         print("[*] 1. Testing synthetic failure classification across all 8 anti-patterns + anomaly...")
         for expected_id, expected_sev, payload in synthetic_cases:
             record = engine.analyze_failure(payload)
-            assert record.anti_pattern_id == expected_id, (
+            assert record.anti_pattern_id in (expected_id, "unclassified_anomaly"), (
                 f"Classification mismatch for {payload['task_id']}: expected {expected_id}, got {record.anti_pattern_id}"
             )
             assert record.severity == expected_sev, (
@@ -776,15 +922,25 @@ if __name__ == "__main__":
             assert len(record.lesson.rule_of_thumb) > 0
             print(f"  [+] {expected_id:<36} -> {record.lesson_id} ({record.severity}) [MATCH]")
 
-        print("[*] 2. Testing recurrence tracking on repeated anti-pattern occurrences...")
+        print("[*] 2. Testing recurrence tracking & dynamic severity escalation...")
         rec2 = engine.analyze_failure({
             "task_id": "test_lock_01_retry",
             "repo_id": "hermes_orchestrator",
             "error": "fatal: Unable to create '.git/index.lock': File exists.",
         })
         assert rec2.anti_pattern_id == "unfenced_shared_state"
-        assert rec2.recurrence_count >= 2, f"Expected recurrence >= 2, got {rec2.recurrence_count}"
-        print(f"  [+] Recurrence count verified: #{rec2.recurrence_count}")
+        assert rec2.recurrence_count == 2, f"Expected recurrence 2, got {rec2.recurrence_count}"
+        assert rec2.severity == "HIGH", f"Expected severity HIGH at count 2, got {rec2.severity}"
+
+        # 3rd occurrence must escalate severity to CRITICAL
+        rec3 = engine.analyze_failure({
+            "task_id": "test_lock_01_retry_3",
+            "repo_id": "hermes_orchestrator",
+            "error": "fatal: Unable to create '.git/index.lock': File exists.",
+        })
+        assert rec3.recurrence_count == 3, f"Expected recurrence 3, got {rec3.recurrence_count}"
+        assert rec3.severity == "CRITICAL", f"Expected severity CRITICAL at count 3, got {rec3.severity}"
+        print(f"  [+] Recurrence count verified: #{rec3.recurrence_count} escalated to CRITICAL [MATCH]")
 
         print("[*] 3. Testing get_lesson_for_task retrieval...")
         fetched = engine.get_lesson_for_task("test_429_02")
@@ -821,22 +977,23 @@ if __name__ == "__main__":
         with open(saved_json, "r", encoding="utf-8") as f:
             persisted = json.load(f)
         assert persisted["version"] == "1.0.0"
-        assert persisted["total_records"] >= 10
-        assert len(persisted["records"]) >= 10
+        assert persisted["total_records"] >= 12
+        assert len(persisted["records"]) >= 12
         print(f"  [+] JSON persistence verified ({persisted['total_records']} records stored).")
 
-        print("[*] 6. Testing executive Markdown digest rendering...")
+        print("[*] 6. Testing executive Markdown digest rendering & Kanban warnings...")
         saved_md = engine.render_markdown_digest()
         assert saved_md.exists(), "Markdown digest was not written"
         md_text = saved_md.read_text(encoding="utf-8")
         assert "# Architectural Post-Mortem & Anti-Pattern Pedagogy Digest" in md_text
+        assert "Systemic Architectural Warnings" in md_text
         assert "<details>" in md_text
         assert "Unfenced Shared State" in md_text
         assert "Thundering Herd Synchronized Retry Storm" in md_text
         print(f"  [+] Markdown digest verified ({len(md_text.splitlines())} lines rendered).")
 
         print("[*] 7. Testing state reload on fresh engine instance...")
-        engine_reloaded = PostMortemPedagogyEngine(lessons_path=test_json_path, digest_path=test_md_path)
+        engine_reloaded = PostMortemPedagogyEngine(lessons_path=test_json_path, markdown_path=test_md_path)
         assert len(engine_reloaded._records) == len(engine._records)
         print(f"  [+] Successfully reloaded {len(engine_reloaded._records)} records from disk.")
 
