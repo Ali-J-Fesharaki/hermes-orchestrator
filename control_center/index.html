@@ -97,6 +97,9 @@
     <button onclick="switchTab('linkedin')" id="tab-btn-linkedin" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
       <i class="fa-brands fa-linkedin text-blue-400"></i> LinkedIn Queue
     </button>
+    <button onclick="switchTab('roadmap')" id="tab-btn-roadmap" class="py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition">
+      <i class="fa-solid fa-map text-amber-400"></i> Strategic Roadmap
+    </button>
   </div>
 
   <!-- Main Content Area -->
@@ -394,6 +397,38 @@
         <!-- Cards Container -->
         <div class="space-y-4 mt-4" id="bugfix-tasks-container">
           <div class="p-8 text-center text-slate-500 font-mono text-xs">Loading failed tasks registry...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- TAB 6: STRATEGIC ROADMAP & ARCHITECTURAL EVOLUTION VIEWER         -->
+    <!-- ================================================================= -->
+    <div id="tab-roadmap" class="hidden space-y-6">
+      <div class="glass rounded-xl p-6 border border-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-800">
+          <div>
+            <h3 class="text-base font-bold text-amber-400 flex items-center gap-2">
+              <i class="fa-solid fa-map-location-dot"></i> Hermes Orchestrator Strategic Evolution Roadmap
+            </h3>
+            <p class="text-xs text-slate-400 mt-1">
+              Authoritative goal dashboard (<code class="text-indigo-300 font-mono">FUTURE_ROADMAP.md</code>) defining platform evolution, architectural mentorship, and concurrency milestones.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="px-3 py-1 rounded-full text-xs font-mono font-bold bg-amber-950 text-amber-300 border border-amber-800">
+              <i class="fa-solid fa-code-fork text-amber-400"></i> Active Target: /home/ajf/automation
+            </span>
+            <button onclick="loadRoadmap()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 transition flex items-center gap-1.5">
+              <i class="fa-solid fa-rotate"></i> Reload Roadmap
+            </button>
+          </div>
+        </div>
+
+        <div id="roadmap-loading" class="p-8 text-center text-slate-500 font-mono text-xs">
+          <i class="fa-solid fa-spinner fa-spin text-amber-400 text-lg mb-2"></i><br>Loading FUTURE_ROADMAP.md...
+        </div>
+        <div id="roadmap-rendered" class="hidden bg-slate-950 p-6 rounded-xl border border-slate-800 text-slate-200 text-xs leading-relaxed font-sans whitespace-pre-wrap max-h-[75vh] overflow-y-auto">
         </div>
       </div>
     </div>
@@ -883,7 +918,7 @@
     let globalData = {};
 
     function switchTab(tabId) {
-      ['kanban', 'repos', 'telemetry', 'bugfix', 'linkedin'].forEach(t => {
+      ['kanban', 'repos', 'telemetry', 'bugfix', 'linkedin', 'roadmap'].forEach(t => {
         const el = document.getElementById(`tab-${t}`);
         const btn = document.getElementById(`tab-btn-${t}`);
         if (el) el.classList.add('hidden');
@@ -905,6 +940,28 @@
         renderTelemetry();
       } else if (tabId === 'bugfix') {
         renderBugfixQueue();
+      } else if (tabId === 'roadmap') {
+        loadRoadmap();
+      }
+    }
+
+    async function loadRoadmap() {
+      const loading = document.getElementById('roadmap-loading');
+      const rendered = document.getElementById('roadmap-rendered');
+      if (!loading || !rendered) return;
+      loading.classList.remove('hidden');
+      rendered.classList.add('hidden');
+
+      try {
+        const res = await fetch('/api/roadmap');
+        const data = await res.json();
+        loading.classList.add('hidden');
+        rendered.classList.remove('hidden');
+        rendered.innerText = data.content || '(Roadmap file is empty)';
+      } catch (err) {
+        loading.classList.add('hidden');
+        rendered.classList.remove('hidden');
+        rendered.innerText = 'Error loading roadmap: ' + err.message;
       }
     }
 
@@ -1303,12 +1360,20 @@
           const isRepoAutoApprove = Boolean(repo.auto_approve_plans);
           const isApproved = Boolean(m.approved_for_auto_run) || isRepoAutoApprove;
 
+          // Task Dependency DAG Check
+          const deps = m.depends_on || m.prerequisites || [];
+          const completedNames = new Set((repo.milestones || []).filter(other => other.status === 'completed').map(other => (other.name || '').trim().toLowerCase()));
+          const unmetDeps = deps.filter(d => !completedNames.has(String(d).trim().toLowerCase()));
+          const isBlockedByDep = (unmetDeps.length > 0 && m.status !== 'completed');
+
           if (m.status === 'completed' || ghCol === 'done') {
             col = 'done';
           } else if (m.status === 'in_review' || ghCol === 'in review') {
             col = 'inreview';
           } else if (isWorking) {
             col = 'inprogress';
+          } else if (isBlockedByDep) {
+            col = 'backlog';
           } else if (m.status === 'ready' || ghCol === 'ready' || (m.status === 'in_progress' && isApproved)) {
             col = 'ready';
           } else if (m.status === 'pending' || m.status === 'todo') {
@@ -1468,6 +1533,14 @@
                   </div>
                 `;
               }
+              if (isBlockedByDep) {
+                return `
+                  <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-purple-300 font-mono" title="Waiting for prerequisite milestone: ${unmetDeps.join(', ')}">
+                    <span class="flex items-center gap-1"><i class="fa-solid fa-link text-purple-400"></i> Blocked by Dependency</span>
+                    <span class="text-[9px] text-purple-400/80 truncate max-w-[130px]">${unmetDeps[0]}</span>
+                  </div>
+                `;
+              }
               if (!isApproved) {
                 return `
                   <div class="pt-1.5 border-t border-slate-700/30 flex items-center justify-between text-[10px] text-amber-300 font-mono" title="AI plan waiting for human authorization. Click ⚡ button to approve.">
@@ -1518,50 +1591,150 @@
       const isQuotaPaused = (q.status === 'WAITING_FOR_QUOTA' || q.alarm_active);
       const activeAgentsCount = Object.keys(globalData.telemetry?.active_agents || {}).length;
 
+      const diag = globalData.concurrency_diagnostics || {};
+      const safeSlots = diag.safe_concurrency_allowed || 2;
+      const maxSlots = diag.requested_max_concurrency || 3;
+      const activeSlots = diag.active_workers_count || activeAgentsCount;
+      const bottleneck = diag.bottleneck_reason || "";
+      const govTier = diag.governor_tier || "BALANCED_OPTIMAL";
+
       actionArea.innerHTML = '';
 
+      const concurrencyBadgeHtml = `
+        <div class="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between flex-wrap gap-2 text-[11px] font-mono">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              ⚡ Concurrency: ${activeSlots}/${safeSlots} Slots Active (Max: ${maxSlots})
+            </span>
+            <span class="text-slate-400">
+              Policy: <b class="text-teal-400">${govTier}</b>
+            </span>
+          </div>
+          <div class="text-slate-400 truncate max-w-xl" title="${bottleneck}">
+            <i class="fa-solid fa-circle-info text-indigo-400"></i> ${bottleneck}
+          </div>
+        </div>
+      `;
+
       if (!isGatewayOnline) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-rose-950/40 border-rose-500/40";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping";
-        title.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-rose-400"></i> LLM Router Disconnected (:8045 / :7836 Offline)`;
-        desc.innerText = "Plans cannot execute because the local LLM router port is unreachable. Click 'Inspect Health' to diagnose.";
-        actionArea.innerHTML = `<button onclick="openFleetHealthModal()" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold">Inspect Health</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-rose-950/40 border-rose-500/40";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-triangle-exclamation text-rose-400"></i> LLM Router Disconnected (:8045 / :7836 Offline)
+                </p>
+                <p class="text-[11px] text-slate-400">Plans cannot execute because the local LLM router port is unreachable. Click 'Inspect Health' to diagnose.</p>
+              </div>
+            </div>
+            <button onclick="openFleetHealthModal()" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold">Inspect Health</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else if (!isOrchRunning) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-slate-900/90 border-slate-700";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-slate-500";
-        title.innerHTML = `<i class="fa-solid fa-circle-pause text-amber-400"></i> Autonomous Loop is OFF (System Idle)`;
-        desc.innerText = `There are ${cReady} ready milestone(s) and ${cBacklog} backlog plan(s), but background auto-execution is turned OFF.`;
-        actionArea.innerHTML = `<button onclick="toggleAutonomousLoop()" class="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-play"></i> Enable Auto Loop</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-slate-900/90 border-slate-700";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-circle-pause text-amber-400"></i> Autonomous Loop is OFF (System Idle)
+                </p>
+                <p class="text-[11px] text-slate-400">There are ${cReady} ready milestone(s) and ${cBacklog} backlog plan(s), but background auto-execution is turned OFF.</p>
+              </div>
+            </div>
+            <button onclick="toggleAutonomousLoop()" class="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-play"></i> Enable Auto Loop</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else if (isQuotaPaused) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-amber-950/40 border-amber-500/40";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse";
-        title.innerHTML = `<i class="fa-solid fa-hourglass-half text-amber-400"></i> Token Quota Cooldown Active (${q.minutes_remaining || 0}m remaining)`;
-        desc.innerText = `Orchestrator is temporarily paused until ${q.next_run_iso || 'soon'} to protect Google account rolling limits from 429 penalties.`;
-        actionArea.innerHTML = `<button onclick="openQuotaOptimizerModal()" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">View Quota Details</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-amber-950/40 border-amber-500/40";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-hourglass-half text-amber-400"></i> Token Quota Cooldown Active (${q.minutes_remaining || 0}m remaining)
+                </p>
+                <p class="text-[11px] text-slate-400">Orchestrator is temporarily paused until ${q.next_run_iso || 'soon'} to protect Google account rolling limits from 429 penalties.</p>
+              </div>
+            </div>
+            <button onclick="openQuotaOptimizerModal()" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">View Quota Details</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else if (cInprog > 0 || activeAgentsCount > 0) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-indigo-950/40 border-indigo-500/40";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse";
-        title.innerHTML = `<i class="fa-solid fa-rocket text-indigo-400"></i> ${activeAgentsCount || cInprog} Hermes Agent(s) Actively Executing Code`;
-        desc.innerText = `Workers are generating code, running compiler tests, and committing atomically. Next tasks will dispatch automatically when slots open.`;
-        actionArea.innerHTML = `<button onclick="switchTab('telemetry')" class="px-3 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold">Live Telemetry</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-indigo-950/40 border-indigo-500/40";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-rocket text-indigo-400"></i> ${activeAgentsCount || cInprog} Hermes Agent(s) Actively Executing Code
+                </p>
+                <p class="text-[11px] text-slate-400">Workers are generating code, running compiler tests, and committing atomically. Next tasks dispatch when slots open.</p>
+              </div>
+            </div>
+            <button onclick="switchTab('telemetry')" class="px-3 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold">Live Telemetry</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else if (cReady > 0) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-teal-950/40 border-teal-500/40";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse";
-        title.innerHTML = `<i class="fa-solid fa-bolt text-teal-400"></i> ${cReady} Milestone(s) Approved & Ready for Dispatch`;
-        desc.innerText = "Execution queue is ready! The orchestrator daemon will dispatch worker agents in its next cycle pass (within ~15s).";
-        actionArea.innerHTML = `<button onclick="triggerOrchestrator()" class="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-forward-step"></i> Trigger Dispatch Now</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-teal-950/40 border-teal-500/40";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-teal-400 animate-pulse"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-bolt text-teal-400"></i> ${cReady} Milestone(s) Approved & Ready for Dispatch
+                </p>
+                <p class="text-[11px] text-slate-400">Execution queue is ready! The orchestrator daemon will dispatch worker agents in its next cycle pass (within ~15s).</p>
+              </div>
+            </div>
+            <button onclick="triggerOrchestrator()" class="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-forward-step"></i> Trigger Dispatch Now</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else if (cBacklog > 0) {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-amber-950/30 border-amber-500/30";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-amber-400";
-        title.innerHTML = `<i class="fa-solid fa-hand text-amber-400"></i> ${cBacklog} Plan(s) Waiting in Backlog for ⚡ Human Approval`;
-        desc.innerText = "Plans exist on the board, but execution is blocked waiting for human authorization. Click the ⚡ button on cards, or toggle 'Auto-Approve Plans' in Repositories.";
-        actionArea.innerHTML = `<button onclick="switchTab('repos')" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Manage Auto-Approve</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-amber-950/30 border-amber-500/30";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-hand text-amber-400"></i> ${cBacklog} Plan(s) Waiting in Backlog for ⚡ Human Approval
+                </p>
+                <p class="text-[11px] text-slate-400">Plans exist on the board, but execution is blocked waiting for human authorization. Click the ⚡ button on cards, or toggle 'Auto-Approve Plans' in Repositories.</p>
+              </div>
+            </div>
+            <button onclick="switchTab('repos')" class="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold">Manage Auto-Approve</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       } else {
-        banner.className = "p-3.5 rounded-xl border flex items-center justify-between gap-4 transition shadow-sm bg-slate-900/80 border-slate-800";
-        dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400";
-        title.innerHTML = `<i class="fa-solid fa-check-double text-emerald-400"></i> All Milestones Completed & Goals Up to Date`;
-        desc.innerText = "Execution queue is empty. The autonomous strategic planner will audit repositories and replenish the pipeline buffer.";
-        actionArea.innerHTML = `<button onclick="openSteerModal()" class="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-wand-magic-sparkles"></i> Steer Planner</button>`;
+        banner.className = "p-3.5 rounded-xl border flex flex-col gap-2 transition shadow-sm bg-slate-900/80 border-slate-800";
+        banner.innerHTML = `
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+              <div>
+                <p class="text-xs font-bold text-white flex items-center gap-2">
+                  <i class="fa-solid fa-check-double text-emerald-400"></i> All Milestones Completed & Goals Up to Date
+                </p>
+                <p class="text-[11px] text-slate-400">Execution queue is empty. The autonomous strategic planner will audit repositories and replenish the pipeline buffer.</p>
+              </div>
+            </div>
+            <button onclick="openSteerModal()" class="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5"><i class="fa-solid fa-wand-magic-sparkles"></i> Steer Planner</button>
+          </div>
+          ${concurrencyBadgeHtml}
+        `;
       }
     }
 

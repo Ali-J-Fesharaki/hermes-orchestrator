@@ -1477,6 +1477,20 @@ def is_milestone_executable(m: dict, repo: dict = None) -> bool:
     if st not in ("in_progress", "pending", "ready", "backlog", "todo"):
         return False
 
+    # 0. Task Dependency DAG Check (Prerequisites must be completed before execution)
+    deps = m.get("depends_on", []) or m.get("prerequisites", [])
+    if deps and repo:
+        completed_in_repo = {
+            other.get("name", "").strip().lower()
+            for other in repo.get("milestones", [])
+            if other.get("status") == "completed"
+        }
+        for d in deps:
+            d_clean = str(d).strip().lower()
+            if d_clean and d_clean not in completed_in_repo:
+                # Prerequisite is not completed yet! Hold execution.
+                return False
+
     # Auto-Approve Mode: If repo has auto_approve_plans enabled, bypass manual approval requirement!
     if repo and repo.get("auto_approve_plans", False):
         return True

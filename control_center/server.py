@@ -101,8 +101,21 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_failed_tasks()
         elif parsed.path == "/api/fleet_health":
             self.handle_fleet_health()
+        elif parsed.path == "/api/roadmap":
+            self.handle_roadmap()
         else:
             super().do_GET()
+
+    def handle_roadmap(self):
+        roadmap_path = BASE_DIR / "FUTURE_ROADMAP.md"
+        content = ""
+        if roadmap_path.exists():
+            content = roadmap_path.read_text(encoding="utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"content": content, "path": "FUTURE_ROADMAP.md"}).encode("utf-8"))
 
     def handle_fleet_health(self):
         try:
@@ -1165,6 +1178,74 @@ def check_router_health() -> dict:
         "checked_at": datetime.now().strftime("%H:%M:%S")
     }
 
+def compute_concurrency_diagnostics(repos, telemetry_data, governor_state, accounts):
+    requested_max = 3
+    safe_concurrent = governor_state.get("safe_concurrency", 2)
+    gov_tier = governor_state.get("tier", "BALANCED_OPTIMAL")
+    
+    active_agents = telemetry_data.get("active_agents", {})
+    active_count = len(active_agents)
+    
+    executable_count = 0
+    seen_targets = set()
+    file_collisions = []
+    blocked_by_dependencies = 0
+    
+    for r in repos:
+        completed_in_repo = {
+            m.get("name", "").strip().lower()
+            for m in r.get("milestones", [])
+            if m.get("status") == "completed"
+        }
+        for m in r.get("milestones", []):
+            st = m.get("status", "pending")
+            if st in ("completed", "blocked"):
+                continue
+            is_approved = bool(m.get("approved_for_auto_run")) or bool(r.get("auto_approve_plans"))
+            if not is_approved and not m.get("is_recovery"):
+                continue
+            
+            # Check DAG dependencies
+            deps = m.get("depends_on", []) or m.get("prerequisites", [])
+            unmet = [d for d in deps if str(d).strip().lower() not in completed_in_repo]
+            if unmet:
+                blocked_by_dependencies += 1
+                continue
+                
+            executable_count += 1
+            target_f = m.get("relative_filepath", m.get("name"))
+            if target_f in seen_targets:
+                file_collisions.append(target_f)
+            else:
+                seen_targets.add(target_f)
+
+    healthy_accounts = sum(1 for a in accounts if a.get("gemini_5h_percent", 0) > 0 and not a.get("health_warning"))
+    
+    bottleneck_reason = ""
+    if healthy_accounts == 0:
+        bottleneck_reason = "No healthy accounts with remaining quota in pool."
+    elif safe_concurrent < requested_max:
+        bottleneck_reason = f"Adaptive Rate Governor limited concurrency to {safe_concurrent} worker(s) (Policy: {gov_tier}) to prevent burst 429 rate limits."
+    elif executable_count < safe_concurrent:
+        bottleneck_reason = f"Only {executable_count} executable milestone(s) currently ready across active repositories."
+    elif file_collisions:
+        bottleneck_reason = f"File deconfliction active: multiple ready tasks target '{file_collisions[0]}'. Running sequentially to prevent Git merge collision."
+    elif active_count >= safe_concurrent:
+        bottleneck_reason = f"All {safe_concurrent} allocated worker slots are actively executing."
+    else:
+        bottleneck_reason = f"Stagger interval pacing ({governor_state.get('stagger_delay_sec', 0.95)}s delay between workers)."
+
+    return {
+        "requested_max_concurrency": requested_max,
+        "safe_concurrency_allowed": safe_concurrent,
+        "governor_tier": gov_tier,
+        "active_workers_count": active_count,
+        "executable_tasks_count": executable_count,
+        "blocked_by_dependencies_count": blocked_by_dependencies,
+        "file_collisions": file_collisions,
+        "bottleneck_reason": bottleneck_reason
+    }
+
 def get_system_snapshot():
     # Auto clean ghost / abandoned agents
     try:
@@ -1263,6 +1344,9 @@ def get_system_snapshot():
     except Exception:
         pass
 
+    # 13. Concurrency & Slot Allocation Diagnostics
+    concurrency_diag = compute_concurrency_diagnostics(repos, telemetry, rate_governor, accounts)
+
     return {
         "telemetry": telemetry,
         "repositories": repos,
@@ -1279,6 +1363,7 @@ def get_system_snapshot():
         "quota_optimizer": quota_optimizer,
         "rate_governor": rate_governor,
         "failed_tasks": failed_tasks,
+        "concurrency_diagnostics": concurrency_diag,
         "orchestrator_running": bool(orch_pid),
         "orchestrator_pid": orch_pid,
         "github_bridge": {
