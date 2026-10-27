@@ -698,8 +698,8 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         if not repo_id:
             repo_id = f"repo_{int(time.time())}"
 
-        # Initialize README or goal file if doesn't exist
-        goal_file = "README.md"
+        # Initialize ROADMAP or goal file if doesn't exist
+        goal_file = "ROADMAP.md" if (repo_path / "ROADMAP.md").exists() else "README.md"
         if repo_path.exists():
             if not (repo_path / goal_file).exists():
                 try:

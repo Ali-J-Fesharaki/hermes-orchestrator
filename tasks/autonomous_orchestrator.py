@@ -542,6 +542,65 @@ def get_repo_git_state(repo_path: Path) -> dict:
         "clean": len(status) == 0
     }
 
+def resolve_authoritative_goal_document(repo_path: Path, repo_entry: dict) -> Tuple[str, str]:
+    """
+    Resolves the authoritative roadmap/goal document for a repository.
+    Default Priority Order:
+    1. If a dedicated roadmap file exists (ROADMAP.md, roadmap.md, FUTURE_ROADMAP.md, 1_Roadmap_and_Progress.md),
+       it ALWAYS takes precedence over generic README.md.
+    2. Explicitly configured goal_file in repositories.json (e.g. DASHBOARD_STATE.md).
+    3. Standard candidate filenames:
+       - ROADMAP.md
+       - roadmap.md
+       - FUTURE_ROADMAP.md
+       - 1_Roadmap_and_Progress.md
+       - DASHBOARD_STATE.md
+       - GOALS.md
+       - README.md / readme.md
+    Returns (goal_filename, goal_content).
+    """
+    configured = repo_entry.get("goal_file", "").strip()
+    
+    # Priority 1: Check standard primary roadmap files first
+    roadmap_candidates = [
+        "ROADMAP.md",
+        "roadmap.md",
+        "FUTURE_ROADMAP.md",
+        "1_Roadmap_and_Progress.md",
+        "DASHBOARD_STATE.md",
+    ]
+    
+    # If explicitly configured to a dedicated non-README file, check it first
+    if configured and configured.lower() not in ("readme.md", ""):
+        cfg_path = repo_path / configured
+        if cfg_path.exists() and cfg_path.is_file():
+            try:
+                return configured, cfg_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+    # Check top roadmap candidate files in repository root
+    for candidate in roadmap_candidates:
+        cand_path = repo_path / candidate
+        if cand_path.exists() and cand_path.is_file():
+            try:
+                return candidate, cand_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+    # Fallback to configured or standard README.md
+    for fb in [configured, "README.md", "readme.md", "GOALS.md"]:
+        if not fb:
+            continue
+        fb_path = repo_path / fb
+        if fb_path.exists() and fb_path.is_file():
+            try:
+                return fb, fb_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+                
+    return "ROADMAP.md", ""
+
 # ==============================================================================
 # 🧠 STRATEGIC PLANNER DAEMON (CLAUDE OPUS 4.6 THINKING)
 # ==============================================================================
@@ -607,10 +666,7 @@ def run_planner_pass(repos: list) -> bool:
             
             try:
                 git_state = get_repo_git_state(repo_path)
-                goal_doc = ""
-                goal_filename = repo.get("goal_file", "README.md")
-                if (repo_path / goal_filename).exists():
-                    goal_doc = (repo_path / goal_filename).read_text(encoding="utf-8")
+                goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
                     
                 existing_pipeline_block = ""
                 if pending:
@@ -659,8 +715,9 @@ def run_planner_pass(repos: list) -> bool:
                     f"Category: {repo.get('category', 'general')}\n"
                     f"Active Branch: {git_state['branch']}\n"
                     f"Recent Commits:\n{git_state['recent_commits']}\n\n"
-                    f"--- GOAL DASHBOARD ({goal_filename}) ---\n"
-                    f"{goal_doc[:4000]}\n\n"
+                    f"--- AUTHORITATIVE ROADMAP & GOAL SPECIFICATION ({goal_filename}) ---\n"
+                    f"CRITICAL DIRECTIVE: Deriving your milestones directly from the phases and architecture outlined in this authoritative Roadmap is mandatory.\n\n"
+                    f"{goal_doc[:12000]}\n\n"
                     f"{existing_pipeline_block}"
                     f"{historical_steering}\n"
                     f"{intent_block}"
@@ -738,10 +795,7 @@ def synthesize_steered_milestones(repo_id: str, steering_intent: str, limit: int
 
     try:
         git_state = get_repo_git_state(repo_path)
-        goal_doc = ""
-        goal_filename = target_repo.get("goal_file", "README.md")
-        if (repo_path / goal_filename).exists():
-            goal_doc = (repo_path / goal_filename).read_text(encoding="utf-8")
+        goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, target_repo)
 
         system_prompt = (
             "You are the Principal Strategic Research & Engineering Planner (Claude Opus 4.6 Thinking).\n"
@@ -767,8 +821,9 @@ def synthesize_steered_milestones(repo_id: str, steering_intent: str, limit: int
             f"Category: {target_repo.get('category', 'general')}\n"
             f"Active Branch: {git_state['branch']}\n"
             f"Recent Commits:\n{git_state['recent_commits']}\n\n"
-            f"--- GOAL DASHBOARD ({goal_filename}) ---\n"
-            f"{goal_doc[:4000]}\n\n"
+            f"--- AUTHORITATIVE ROADMAP & GOAL SPECIFICATION ({goal_filename}) ---\n"
+            f"CRITICAL DIRECTIVE: Base milestone generation directly on the authoritative Roadmap phases.\n\n"
+            f"{goal_doc[:12000]}\n\n"
             f"{historical_steering}\n"
             f"--- HUMAN ARCHITECT STEERING INTENT (MAX PRIORITY) ---\n"
             f"{steering_intent}\n\n"

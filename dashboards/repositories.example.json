@@ -12,7 +12,7 @@
       "priority": 1,
       "auto_planning": true,
       "milestone_cap": 3,
-      "goal_file": "README.md",
+      "goal_file": "ROADMAP.md",
       "milestones": [
         {
           "name": "Scaffold: Project Architecture and Base Service",
