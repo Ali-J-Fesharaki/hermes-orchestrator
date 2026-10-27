@@ -110,8 +110,28 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_supervisor_report()
         elif parsed.path == "/api/performance/benchmark":
             self.handle_performance_benchmark()
+        elif parsed.path == "/api/repository_evolution":
+            self.handle_repository_evolution(parsed)
         else:
             super().do_GET()
+
+    def handle_repository_evolution(self, parsed):
+        from urllib.parse import parse_qs
+        qs = parse_qs(parsed.query)
+        repo_id = qs.get("repo", ["hermes_orchestrator"])[0]
+        try:
+            try:
+                from tasks.repository_evolution_engine import calculate_repository_evolution_metrics
+            except ImportError:
+                from repository_evolution_engine import calculate_repository_evolution_metrics  # type: ignore
+            data = calculate_repository_evolution_metrics(repo_id)
+        except Exception as e:
+            data = {"error": str(e), "repo_id": repo_id}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_performance_benchmark(self):
         try:
@@ -286,8 +306,29 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_fleet_smoke_test()
         elif parsed.path == "/api/supervisor/audit_now":
             self.handle_supervisor_audit_now()
+        elif parsed.path == "/api/repository_evolution/steer":
+            self.handle_repository_evolution_steer(payload)
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_repository_evolution_steer(self, payload):
+        repo_id = payload.get("repo_id", "hermes_orchestrator")
+        directive_type = payload.get("directive_type", "EXPEDITE_CORE_ROADMAP")
+        custom_instructions = payload.get("custom_instructions", "")
+        target_cap = int(payload.get("target_cap", 3))
+        try:
+            try:
+                from tasks.repository_evolution_engine import apply_strategic_planning_directive
+            except ImportError:
+                from repository_evolution_engine import apply_strategic_planning_directive  # type: ignore
+            res = apply_strategic_planning_directive(repo_id, directive_type, custom_instructions, target_cap)
+        except Exception as e:
+            res = {"status": "error", "message": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
 
     def handle_supervisor_audit_now(self):
         try:
