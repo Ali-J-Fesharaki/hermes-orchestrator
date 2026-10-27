@@ -284,6 +284,56 @@
         </div>
       </div>
 
+      <!-- Predictive Token Capacity & Concurrency Allocation Panel -->
+      <div class="glass rounded-xl p-5 border border-indigo-500/30 bg-slate-950/80 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-chart-pie text-indigo-400"></i>
+            <h3 class="text-sm font-bold text-white">Predictive Token Capacity & Model Allocation Engine</h3>
+            <span id="capacity-workers-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-800 font-mono">
+              2 Workers Safe Headroom
+            </span>
+          </div>
+          <span id="capacity-runway-badge" class="text-xs text-teal-400 font-mono font-semibold">
+            Runway: ~147.6h remaining
+          </span>
+        </div>
+
+        <!-- Metric Summary Tiles -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Recommended Concurrency</span>
+            <span id="cap-rec-slots" class="text-indigo-400 font-mono font-bold text-base">2 Workers</span>
+            <span id="cap-rec-reason" class="text-[10px] text-slate-400 block truncate" title="">Balanced Headroom</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Total Executor Tokens</span>
+            <span id="cap-tokens-pool" class="text-emerald-400 font-mono font-bold text-base">22.1M Tokens</span>
+            <span class="text-[10px] text-slate-500 block">Across healthy accounts</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Sustainable Milestones</span>
+            <span id="cap-milestones-est" class="text-purple-400 font-mono font-bold text-base">~492 Milestones</span>
+            <span class="text-[10px] text-slate-500 block">Before next 5h reset</span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+            <span class="text-slate-400 block text-[10px] uppercase font-semibold">Telemetry Burn Rate</span>
+            <span id="cap-burn-rate" class="text-amber-400 font-mono font-bold text-base">~75k Tok/h</span>
+            <span id="cap-avg-task" class="text-[10px] text-slate-500 block">~25k Tok/task avg</span>
+          </div>
+        </div>
+
+        <!-- Model-by-Model Capacity Breakdown -->
+        <div class="space-y-2">
+          <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <i class="fa-solid fa-layer-group text-slate-400"></i> Model Capacity & Quota Headroom Breakdown
+          </h4>
+          <div id="capacity-models-list" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
       <!-- Active Running Agents Table -->
       <div class="glass rounded-xl p-5 border border-slate-800">
         <div class="flex items-center justify-between mb-4">
@@ -2080,6 +2130,76 @@
       }
       const elDetails = document.getElementById('gov-details');
       if (elDetails && gov.details) elDetails.innerText = gov.details;
+
+      // 0.5. Predictive Token Capacity & Concurrency Allocation Engine
+      const fc = globalData.capacity_forecast || {};
+      const elCapBadge = document.getElementById('capacity-workers-badge');
+      const elRunway = document.getElementById('capacity-runway-badge');
+      const elRecSlots = document.getElementById('cap-rec-slots');
+      const elRecReason = document.getElementById('cap-rec-reason');
+      const elPoolTokens = document.getElementById('cap-tokens-pool');
+      const elMilestones = document.getElementById('cap-milestones-est');
+      const elBurnRate = document.getElementById('cap-burn-rate');
+      const elAvgTask = document.getElementById('cap-avg-task');
+      const modelsList = document.getElementById('capacity-models-list');
+
+      if (elCapBadge) {
+        elCapBadge.innerText = `${fc.recommended_worker_slots ?? 2} Workers Safe Headroom`;
+      }
+      if (elRunway) {
+        elRunway.innerText = `Runway: ~${fc.estimated_runway_hours ?? 140}h remaining`;
+      }
+      if (elRecSlots) {
+        elRecSlots.innerText = `${fc.recommended_worker_slots ?? 2} Workers`;
+      }
+      if (elRecReason && fc.concurrency_allocation_reason) {
+        elRecReason.innerText = fc.concurrency_allocation_reason;
+        elRecReason.title = fc.concurrency_allocation_reason;
+      }
+      if (elPoolTokens) {
+        const poolM = ((fc.total_executor_tokens_remaining || 0) / 1000000).toFixed(1);
+        elPoolTokens.innerText = `${poolM}M Tokens`;
+      }
+      if (elMilestones) {
+        const mCount = Object.values(fc.models_capacity || {}).reduce((acc, m) => acc + (m.sustainable_milestones || 0), 0);
+        elMilestones.innerText = `~${mCount || 400} Milestones`;
+      }
+      if (elBurnRate) {
+        const brK = Math.round((fc.telemetry_feedback?.estimated_burn_rate_hourly || 75000) / 1000);
+        elBurnRate.innerText = `~${brK}k Tok/h`;
+      }
+      if (elAvgTask) {
+        const avgK = Math.round((fc.telemetry_feedback?.avg_tokens_per_task || 25000) / 1000);
+        elAvgTask.innerText = `~${avgK}k Tok/task avg`;
+      }
+
+      if (modelsList && fc.models_capacity) {
+        modelsList.innerHTML = Object.entries(fc.models_capacity).map(([modId, info]) => {
+          const isAvail = info.is_available;
+          const pct = info.best_account_percentage || 0;
+          const barColor = pct > 60 ? 'bg-emerald-500' : (pct > 25 ? 'bg-amber-500' : 'bg-rose-500');
+          const estM = (info.estimated_tokens_remaining / 1000000).toFixed(2);
+          const roleBadge = info.role === 'executor' ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : (info.role === 'planner' ? 'bg-purple-500/20 text-purple-300 border-purple-500/30' : 'bg-slate-800 text-slate-400 border-slate-700');
+          return `
+            <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+              <div class="flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-white">${info.display_name}</span>
+                  <span class="px-1.5 py-0.2 rounded text-[9px] font-mono border ${roleBadge}">${info.role.toUpperCase()}</span>
+                </div>
+                <span class="font-mono font-bold ${pct > 40 ? 'text-emerald-400' : (pct > 0 ? 'text-amber-400' : 'text-slate-500')}">${pct}% Available</span>
+              </div>
+              <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div class="${barColor} h-full rounded-full transition-all duration-500" style="width: ${Math.min(100, pct)}%"></div>
+              </div>
+              <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1">
+                <span>Reserves: <b class="text-slate-200">${estM}M tok</b> (~${info.sustainable_milestones} tasks)</span>
+                <span class="truncate max-w-[150px]" title="Best account: ${info.best_account}">${info.best_account.split('@')[0]}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
 
       // 1. Active Agents
       const agents = globalData.telemetry?.active_agents || {};

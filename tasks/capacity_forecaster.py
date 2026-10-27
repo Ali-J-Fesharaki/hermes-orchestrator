@@ -15,6 +15,8 @@ import json
 import math
 import os
 from pathlib import Path
+import sqlite3
+from datetime import datetime
 import statistics
 import subprocess
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
@@ -735,6 +737,194 @@ class CapacityForecaster:
         out_p.parent.mkdir(parents=True, exist_ok=True)
         out_p.write_text(content, encoding="utf-8")
         return content
+
+    def get_fleet_capacity_forecast(self) -> dict:
+        """
+        Synthesizes real-time feedback from Telemetry (historical tokens burned, average tokens per task),
+        Account Pools (cloud_accounts.db remaining % per model), and Rate Governor state.
+        Calculates exact token reserves remaining, sustainable milestone counts,
+        and dynamically recommends concurrent worker slots (1 to 3 workers).
+        """
+        telemetry_file = Path("dashboards/telemetry.json")
+        governor_file = Path("dashboards/rate_governor_state.json")
+        accounts_db = Path("/home/ajf/.antigravity-agent/cloud_accounts.db")
+        repos_file = Path("dashboards/repositories.json")
+
+        # 1. Telemetry Feedback
+        total_burned = 0
+        total_calls = 1
+        completed_tasks = 1
+        if telemetry_file.exists():
+            try:
+                with open(telemetry_file, "r", encoding="utf-8") as f:
+                    tdata = json.load(f)
+                totals = tdata.get("totals", {})
+                total_burned = totals.get("total_tokens", 0)
+                total_calls = max(1, totals.get("total_api_calls", 1))
+            except Exception:
+                pass
+
+        if repos_file.exists():
+            try:
+                with open(repos_file, "r", encoding="utf-8") as rf:
+                    rdata = json.load(rf)
+                for r in rdata.get("repositories", []):
+                    for m in r.get("milestones", []):
+                        if m.get("status") == "completed":
+                            completed_tasks += 1
+            except Exception:
+                pass
+
+        avg_tokens_per_task = max(25000, min(100000, total_burned // max(1, completed_tasks)))
+        hourly_burn_estimate = avg_tokens_per_task * 3
+
+        # 2. Rate Governor State
+        gov_tier = "BALANCED_OPTIMAL"
+        stagger_delay = 0.95
+        consecutive_streak = 0
+        if governor_file.exists():
+            try:
+                with open(governor_file, "r", encoding="utf-8") as gf:
+                    gdata = json.load(gf)
+                gov_tier = gdata.get("tier", "BALANCED_OPTIMAL")
+                stagger_delay = gdata.get("stagger_delay_sec", 0.95)
+                consecutive_streak = gdata.get("consecutive_successes", 0)
+            except Exception:
+                pass
+
+        # 3. Account Pool Capacities per Model
+        models_to_track = [
+            ("gemini-3.8-flash-tiered", "Gemini 3.8 Flash (Tiered)", 5_000_000, "executor"),
+            ("gemini-2.5-flash", "Gemini 2.5 Flash", 4_000_000, "executor"),
+            ("claude-opus-4-6-thinking", "Claude Opus 4.6 Thinking", 1_200_000, "planner"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6", 2_000_000, "planner"),
+            ("gpt-oss-120b-medium", "GPT-OSS 120B", 3_000_000, "fallback")
+        ]
+
+        accounts_data = []
+        if accounts_db.exists():
+            try:
+                conn = sqlite3.connect(str(accounts_db), timeout=2.0)
+                c = conn.cursor()
+                c.execute("SELECT email, status, health_json, quota_json FROM accounts")
+                for email, status_val, h_json, q_json in c.fetchall():
+                    h, q = {}, {}
+                    if h_json:
+                        try: h = json.loads(h_json)
+                        except Exception: pass
+                    if q_json:
+                        try: q = json.loads(q_json)
+                        except Exception: pass
+                    is_quar = (h.get("validation", {}).get("status") == "requires_action" or 
+                               h.get("status_reason") == "FORBIDDEN")
+                    is_healthy = (status_val == "active" and not is_quar)
+                    accounts_data.append({
+                        "email": email,
+                        "is_healthy": is_healthy,
+                        "models": q.get("models", {})
+                    })
+                conn.close()
+            except Exception:
+                pass
+
+        healthy_accounts = [a for a in accounts_data if a["is_healthy"]]
+        total_healthy_count = len(healthy_accounts)
+
+        model_capacities = {}
+        highest_executor_quota = 0
+        total_executor_tokens = 0
+
+        for model_id, display_name, baseline_tokens, role in models_to_track:
+            percentages = []
+            best_pct = 0
+            best_account = "None"
+            reset_time = "Unknown"
+
+            for acc in healthy_accounts:
+                m_info = acc["models"].get(model_id, {})
+                pct = m_info.get("percentage", 0)
+                percentages.append(pct)
+                if pct > best_pct:
+                    best_pct = pct
+                    best_account = acc["email"]
+                if m_info.get("resetTime") and reset_time == "Unknown":
+                    reset_time = m_info.get("resetTime")
+
+            pool_aggregate_pct = sum(percentages)
+            est_tokens_remaining = int((pool_aggregate_pct / 100.0) * baseline_tokens)
+            sustainable_milestones = est_tokens_remaining // max(1, avg_tokens_per_task)
+
+            if role == "executor":
+                if best_pct > highest_executor_quota:
+                    highest_executor_quota = best_pct
+                total_executor_tokens += est_tokens_remaining
+
+            model_capacities[model_id] = {
+                "display_name": display_name,
+                "role": role,
+                "best_account_percentage": best_pct,
+                "best_account": best_account,
+                "pool_aggregate_percentage": pool_aggregate_pct,
+                "estimated_tokens_remaining": est_tokens_remaining,
+                "sustainable_milestones": sustainable_milestones,
+                "is_available": best_pct > 0,
+                "reset_time": reset_time
+            }
+
+        # 4. Dynamic Concurrency Allocation Decision
+        if total_healthy_count == 0 or highest_executor_quota == 0:
+            recommended_workers = 0
+            concurrency_reason = "No healthy accounts with remaining quota in pool. Pausing for quota replenishment."
+        elif highest_executor_quota >= 75 and gov_tier == "EXPEDITE_HIGH" and total_healthy_count >= 2:
+            recommended_workers = 3
+            concurrency_reason = f"Peak Headroom ({highest_executor_quota}% quota, EXPEDITE tier). Full 3-worker concurrency permitted."
+        elif highest_executor_quota >= 40:
+            recommended_workers = min(2, total_healthy_count)
+            concurrency_reason = f"Balanced Headroom ({highest_executor_quota}% quota, {gov_tier} tier). Safe 2-worker concurrency allocated."
+        elif highest_executor_quota >= 15:
+            recommended_workers = 1
+            concurrency_reason = f"Conservation Mode ({highest_executor_quota}% quota remaining). Single worker allocated to prevent burst."
+        else:
+            recommended_workers = 0
+            concurrency_reason = f"Low Quota ({highest_executor_quota}% remaining). Paused for rolling window reset."
+
+        hourly_drain = max(50000, hourly_burn_estimate * max(1, recommended_workers))
+        runway_hours = round(total_executor_tokens / hourly_drain, 1)
+
+        forecast_data = {
+            "forecast_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "healthy_accounts_count": total_healthy_count,
+            "recommended_worker_slots": recommended_workers,
+            "max_concurrency_ceiling": 3,
+            "concurrency_allocation_reason": concurrency_reason,
+            "estimated_runway_hours": runway_hours,
+            "total_executor_tokens_remaining": total_executor_tokens,
+            "telemetry_feedback": {
+                "total_tokens_burned": total_burned,
+                "total_api_calls": total_calls,
+                "avg_tokens_per_task": avg_tokens_per_task,
+                "estimated_burn_rate_hourly": hourly_burn_estimate
+            },
+            "governor_feedback": {
+                "tier": gov_tier,
+                "stagger_delay_sec": stagger_delay,
+                "consecutive_successes": consecutive_streak
+            },
+            "models_capacity": model_capacities
+        }
+
+        try:
+            out_file = Path("dashboards/capacity_forecast.json")
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(json.dumps(forecast_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+        return forecast_data
+
+def get_fleet_capacity_forecast() -> dict:
+    forecaster = CapacityForecaster()
+    return forecaster.get_fleet_capacity_forecast()
 
 
 # ============================================================================

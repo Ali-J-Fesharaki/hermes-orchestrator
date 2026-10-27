@@ -103,10 +103,24 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_fleet_health()
         elif parsed.path == "/api/roadmap":
             self.handle_roadmap()
+        elif parsed.path == "/api/capacity/forecast":
+            self.handle_capacity_forecast()
         elif parsed.path == "/api/supervisor/report":
             self.handle_supervisor_report()
         else:
             super().do_GET()
+
+    def handle_capacity_forecast(self):
+        try:
+            from capacity_forecaster import get_fleet_capacity_forecast
+            data = get_fleet_capacity_forecast()
+        except Exception as e:
+            data = {"error": str(e), "recommended_worker_slots": 2}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_supervisor_report(self):
         report_file = DASH_DIR / "SUPERVISOR_AUDIT_REPORT.json"
@@ -1386,6 +1400,14 @@ def get_system_snapshot():
         except Exception:
             pass
 
+    # 15. Predictive Token Capacity & Concurrency Forecast
+    capacity_fc = {}
+    try:
+        from capacity_forecaster import get_fleet_capacity_forecast
+        capacity_fc = get_fleet_capacity_forecast()
+    except Exception:
+        pass
+
     return {
         "telemetry": telemetry,
         "repositories": repos,
@@ -1404,6 +1426,7 @@ def get_system_snapshot():
         "failed_tasks": failed_tasks,
         "concurrency_diagnostics": concurrency_diag,
         "supervisor_report": supervisor_report,
+        "capacity_forecast": capacity_fc,
         "orchestrator_running": bool(orch_pid),
         "orchestrator_pid": orch_pid,
         "github_bridge": {

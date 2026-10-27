@@ -1603,10 +1603,19 @@ def run_executor_pass(repos: list, max_concurrent: int = 3) -> bool:
         except Exception:
             pass
 
+    # Dynamic Capacity & Worker Headroom Forecasting (using feedback from telemetry & quota pools)
     try:
-        safe_concurrent = _GOVERNOR.compute_safe_concurrency(requested_max=max_concurrent, model_id=EXECUTOR_MODEL)
+        from capacity_forecaster import get_fleet_capacity_forecast
+        c_fc = get_fleet_capacity_forecast()
+        recommended_slots = c_fc.get("recommended_worker_slots", 2)
+        safe_concurrent = min(max_concurrent, recommended_slots)
+        if safe_concurrent < max_concurrent:
+            print(f"[*] Capacity Forecaster: Concurrency set to {safe_concurrent} worker(s). Reason: {c_fc.get('concurrency_allocation_reason')}")
     except Exception:
-        safe_concurrent = min(2, max_concurrent)
+        try:
+            safe_concurrent = _GOVERNOR.compute_safe_concurrency(requested_max=max_concurrent, model_id=EXECUTOR_MODEL)
+        except Exception:
+            safe_concurrent = min(2, max_concurrent)
 
     print("\n" + "=" * 75)
     print(f" ⚡ ADAPTIVE PRIORITIZED EXECUTOR DISPATCH (SAFE HEADROOM: {safe_concurrent} WORKERS)")
