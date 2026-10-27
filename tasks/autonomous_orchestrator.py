@@ -31,6 +31,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Union
 
 # Base Paths
 AUTO_DIR = Path(__file__).resolve().parent.parent
@@ -425,19 +426,28 @@ def call_llm(model: str, messages: list, repo_id: str = "general", repo_name: st
                 time.sleep(3 * attempt)
         raise last_err or RuntimeError(f"Direct fallback also failed for {model}")
 
+_GIT_LOCK = threading.Lock()
+_REPOS_GLOBAL_LOCK = threading.RLock()
+_DISPATCH_TRIGGER = threading.Event()
+_SHUTDOWN_EVENT = threading.Event()
+
 def load_repositories() -> list:
     """Loads and returns all repositories sorted by priority (1, 2, 3...)."""
-    if not REPOS_FILE.exists():
-        example_file = DASHBOARDS_DIR / "repositories.example.json"
-        if example_file.exists():
-            import shutil
-            shutil.copyfile(example_file, REPOS_FILE)
-        else:
+    with _REPOS_GLOBAL_LOCK:
+        if not REPOS_FILE.exists():
+            example_file = DASHBOARDS_DIR / "repositories.example.json"
+            if example_file.exists():
+                import shutil
+                shutil.copyfile(example_file, REPOS_FILE)
+            else:
+                return []
+        try:
+            with open(REPOS_FILE, "r", encoding="utf-8") as f:
+                repos = json.load(f).get("repositories", [])
+        except Exception:
             return []
-    with open(REPOS_FILE, "r") as f:
-        repos = json.load(f).get("repositories", [])
-    repos.sort(key=lambda r: r.get("priority", 99))
-    return repos
+        repos.sort(key=lambda r: r.get("priority", 99))
+        return repos
 
 def save_repositories(repos: list):
     """
@@ -445,74 +455,75 @@ def save_repositories(repos: list):
     newly added repositories, and strictly RESPECTING human user configurations
     from disk (e.g. auto_planning, auto_approve_plans, milestone approvals).
     """
-    repos_file = REPOS_FILE
-    existing_data = {}
-    if repos_file.exists():
-        try:
-            with open(repos_file, "r", encoding="utf-8") as f:
-                existing_data = json.load(f)
-        except Exception:
-            pass
-            
-    # Filter out any repositories explicitly removed by the user in the Web UI
-    removed_ids = set(existing_data.get("removed_repositories", []))
-    repos[:] = [r for r in repos if r.get("id") not in removed_ids and r.get("name") not in removed_ids]
-
-    existing_repos = existing_data.get("repositories", [])
-    disk_repo_map = {r.get("id"): r for r in existing_repos if r.get("id")}
-    in_memory_ids = {r.get("id") for r in repos if r.get("id")}
-
-    # 1. Synchronize user-controlled configurations from disk into in-memory repos before saving
-    for repo in repos:
-        rid = repo.get("id")
-        if rid in disk_repo_map:
-            dr = disk_repo_map[rid]
-            # Always respect user's manual toggles from disk:
-            repo["auto_planning"] = dr.get("auto_planning", repo.get("auto_planning", True))
-            repo["auto_approve_plans"] = dr.get("auto_approve_plans", repo.get("auto_approve_plans", False))
-            repo["planner_model"] = dr.get("planner_model", repo.get("planner_model"))
-            repo["executor_model"] = dr.get("executor_model", repo.get("executor_model"))
-            repo["milestone_cap"] = dr.get("milestone_cap", repo.get("milestone_cap", 3))
-            repo["priority"] = dr.get("priority", repo.get("priority", 99))
-            
-            # For milestones that are NOT actively executing in-progress, respect user approvals from disk
-            disk_milestones = {m.get("name"): m for m in dr.get("milestones", []) if m.get("name")}
-            for m in repo.get("milestones", []):
-                mname = m.get("name")
-                if mname in disk_milestones:
-                    dm = disk_milestones[mname]
-                    if dm.get("skills"):
-                        m["skills"] = dm["skills"]
-                    if m.get("status") not in ("in_progress", "completed"):
-                        m["approved_for_auto_run"] = dm.get("approved_for_auto_run", False)
-                        m["status"] = dm.get("status", m.get("status"))
-                        m["github_column"] = dm.get("github_column", m.get("github_column"))
-
-            # Ensure all milestones have their top 3 authoritative skills assigned
+    with _REPOS_GLOBAL_LOCK:
+        repos_file = REPOS_FILE
+        existing_data = {}
+        if repos_file.exists():
             try:
-                from tasks.skill_matcher import infer_task_skills
-                for m in repo.get("milestones", []):
-                    curr_s = m.get("skills")
-                    if not isinstance(curr_s, list) or len(curr_s) < 3:
-                        m["skills"] = infer_task_skills(m, rid, repo.get("category", ""))
+                with open(repos_file, "r", encoding="utf-8") as f:
+                    existing_data = json.load(f)
             except Exception:
                 pass
+                
+        # Filter out any repositories explicitly removed by the user in the Web UI
+        removed_ids = set(existing_data.get("removed_repositories", []))
+        repos[:] = [r for r in repos if r.get("id") not in removed_ids and r.get("name") not in removed_ids]
 
-    # 2. Merge newly added on-disk repositories that might have been added by user/API while orchestrator was running
-    for er in existing_repos:
-        er_id = er.get("id")
-        if er_id and er_id not in in_memory_ids and er_id not in removed_ids:
-            repos.append(er)
-            in_memory_ids.add(er_id)
-            
-    existing_data["repositories"] = repos
-    
-    # Atomic write via tempfile to avoid race conditions or half-written files
-    temp_path = repos_file.with_suffix(".tmp")
-    with open(temp_path, "w", encoding="utf-8") as f:
-        json.dump(existing_data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    temp_path.replace(repos_file)
+        existing_repos = existing_data.get("repositories", [])
+        disk_repo_map = {r.get("id"): r for r in existing_repos if r.get("id")}
+        in_memory_ids = {r.get("id"): r for r in repos if r.get("id")}
+
+        # 1. Synchronize user-controlled configurations from disk into in-memory repos before saving
+        for repo in repos:
+            rid = repo.get("id")
+            if rid in disk_repo_map:
+                dr = disk_repo_map[rid]
+                # Always respect user's manual toggles from disk:
+                repo["auto_planning"] = dr.get("auto_planning", repo.get("auto_planning", True))
+                repo["auto_approve_plans"] = dr.get("auto_approve_plans", repo.get("auto_approve_plans", False))
+                repo["planner_model"] = dr.get("planner_model", repo.get("planner_model"))
+                repo["executor_model"] = dr.get("executor_model", repo.get("executor_model"))
+                repo["milestone_cap"] = dr.get("milestone_cap", repo.get("milestone_cap", 3))
+                repo["priority"] = dr.get("priority", repo.get("priority", 99))
+                
+                # For milestones that are NOT actively executing in-progress, respect user approvals from disk
+                disk_milestones = {m.get("name"): m for m in dr.get("milestones", []) if m.get("name")}
+                for m in repo.get("milestones", []):
+                    mname = m.get("name")
+                    if mname in disk_milestones:
+                        dm = disk_milestones[mname]
+                        if dm.get("skills"):
+                            m["skills"] = dm["skills"]
+                        if m.get("status") not in ("in_progress", "completed"):
+                            m["approved_for_auto_run"] = dm.get("approved_for_auto_run", False)
+                            m["status"] = dm.get("status", m.get("status"))
+                            m["github_column"] = dm.get("github_column", m.get("github_column"))
+
+                # Ensure all milestones have their top 3 authoritative skills assigned
+                try:
+                    from tasks.skill_matcher import infer_task_skills
+                    for m in repo.get("milestones", []):
+                        curr_s = m.get("skills")
+                        if not isinstance(curr_s, list) or len(curr_s) < 3:
+                            m["skills"] = infer_task_skills(m, rid, repo.get("category", ""))
+                except Exception:
+                    pass
+
+        # 2. Merge newly added on-disk repositories that might have been added by user/API while orchestrator was running
+        for er in existing_repos:
+            er_id = er.get("id")
+            if er_id and er_id not in in_memory_ids and er_id not in removed_ids:
+                repos.append(er)
+                in_memory_ids[er_id] = er
+                
+        existing_data["repositories"] = repos
+        
+        # Atomic write via tempfile to avoid race conditions or half-written files
+        temp_path = repos_file.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(existing_data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        temp_path.replace(repos_file)
 
 def get_repo_git_state(repo_path: Path) -> dict:
     if not repo_path.exists() or not (repo_path / ".git").exists():
@@ -797,9 +808,6 @@ def synthesize_steered_milestones(repo_id: str, steering_intent: str, limit: int
         telemetry.unregister_agent(agent_id)
         sync_dashboards()
 
-_GIT_LOCK = threading.Lock()
-_REPOS_GLOBAL_LOCK = threading.Lock()
-
 def reconcile_ghost_in_progress_tasks(repos: list, repos_lock=None) -> int:
     """
     Startup & Runtime Self-Healing Reconciler:
@@ -918,7 +926,7 @@ def invoke_recovery_planner(system_prompt: str, user_prompt: str, repo_id: str, 
 # ==============================================================================
 # 🚨 FAILURE RECOVERY, RE-PRIORITIZATION & DEFENSIVE PROTOCOL (NO PURGE)
 # ==============================================================================
-def trigger_failure_replanning(target_repo: dict, failed_milestone: dict, failure_reason: str, repos: list, repos_lock: threading.Lock):
+def trigger_failure_replanning(target_repo: dict, failed_milestone: dict, failure_reason: str, repos: list, repos_lock: Any):
     """
     Called immediately when a milestone fails validation or execution.
     1. STRICTLY PRESERVES all downstream pending milestones (NO PURGE).
@@ -1122,7 +1130,7 @@ def extract_code_artifact(raw_text: str, target_rel: str) -> str:
 # ==============================================================================
 # ⚡ PRIORITIZED EXECUTOR ENGINE (GEMINI 3.8 FLASH TIERED - CONCURRENT WORKERS)
 # ==============================================================================
-def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, repos: list, repos_lock: threading.Lock, worker_index: int = 0) -> bool:
+def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, repos: list, repos_lock: Any, worker_index: int = 0) -> bool:
     """Executes a single milestone for a repository with atomic Git commit."""
     # Stagger dispatch slot through Adaptive Rate Governor
     try:
@@ -1682,6 +1690,191 @@ def run_executor_pass(repos: list, max_concurrent: int = 3) -> bool:
     return any(results)
 
 # ==============================================================================
+# 🔄 PARALLEL MULTI-DAEMON CONCURRENT ARCHITECTURE
+# ==============================================================================
+
+def _planner_daemon_loop():
+    """
+    Independent Autonomous Strategic Planner Daemon:
+    Runs in its own decoupled background thread. Roves repositories asynchronously.
+    Synthesizes milestones when buffer slots open without blocking active worker executors.
+    """
+    print("[*] 🧠 [DAEMON] Strategic Planner Daemon Thread started (Independent Producer).")
+    while not _SHUTDOWN_EVENT.is_set():
+        try:
+            # Check planner quota readiness
+            try:
+                readiness = evaluate_quota_readiness(
+                    executor_model=EXECUTOR_MODEL,
+                    planner_model=PLANNER_MODEL_PRIMARY
+                )
+            except Exception:
+                readiness = {"can_run": True}
+
+            if readiness.get("can_run", True):
+                repos = load_repositories()
+                if repos:
+                    state_changed = run_planner_pass(repos)
+                    if state_changed:
+                        # Immediately wake up executor dispatcher to claim newly synthesized milestones!
+                        _DISPATCH_TRIGGER.set()
+            else:
+                rem_m = readiness.get("minutes_remaining", 5)
+                print(f"[⏳ PLANNER QUOTA PAUSE] Planner paused for {rem_m}m. Will re-evaluate on schedule.")
+        except Exception as pe:
+            print(f"[-] Error in planner daemon loop: {pe}")
+
+        # Sleep 20s or until interrupted
+        _SHUTDOWN_EVENT.wait(timeout=20.0)
+    print("[*] Planner Daemon Thread stopped.")
+
+def _executor_dispatcher_daemon_loop():
+    """
+    Independent Autonomous Executor Dispatcher Daemon:
+    Runs in its own decoupled background thread. Manages an active pool of concurrent workers.
+    Non-blocking: as soon as ANY worker finishes, its slot is immediately filled with the next task.
+    """
+    print("[*] ⚡ [DAEMON] Non-Blocking Worker Dispatcher Thread started (Independent Consumer Pool).")
+    active_futures = {}  # future -> (repo_id, milestone_name, target_file, worker_index, start_time)
+    worker_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="hermes_worker")
+
+    try:
+        while not _SHUTDOWN_EVENT.is_set():
+            # 1. Harvest any finished workers
+            finished = [f for f in list(active_futures.keys()) if f.done()]
+            for f in finished:
+                r_id, m_name, t_file, w_idx, st = active_futures.pop(f)
+                elapsed = round(time.time() - st, 1)
+                try:
+                    res = f.result()
+                    res_str = "SUCCESS" if res else "FAILED"
+                    print(f"[*] 🎯 Worker Complete: '{m_name}' ({r_id}) [{res_str}] in {elapsed}s.")
+                except Exception as we:
+                    print(f"[-] Worker Exception for '{m_name}': {we}")
+                # Signal planner that a task finished / slot freed up
+                _DISPATCH_TRIGGER.set()
+
+            # 2. Check Capacity & Concurrency Allocation
+            try:
+                from capacity_forecaster import get_fleet_capacity_forecast
+                c_fc = get_fleet_capacity_forecast()
+                safe_concurrent = min(3, c_fc.get("recommended_worker_slots", 2))
+            except Exception:
+                safe_concurrent = 2
+
+            open_slots = safe_concurrent - len(active_futures)
+            if open_slots > 0:
+                repos = load_repositories()
+                tasks_to_run = []
+                currently_running_files = {t_file for (_, _, t_file, _, _) in active_futures.values()}
+                currently_running_names = {m_name for (_, m_name, _, _, _) in active_futures.values()}
+
+                # Pass 1: Select 1 executable task per repo (fair multi-repo balance)
+                for repo in repos:
+                    executable = [m for m in repo.get("milestones", []) if is_milestone_executable(m, repo)]
+                    for m in executable:
+                        target_f = m.get("relative_filepath", m.get("name"))
+                        m_name = m.get("name")
+                        if target_f not in currently_running_files and m_name not in currently_running_names:
+                            tasks_to_run.append((repo, m, target_f))
+                            currently_running_files.add(target_f)
+                            currently_running_names.add(m_name)
+                            break
+                    if len(tasks_to_run) >= open_slots:
+                        break
+
+                # Pass 2: Fill remaining open slots across repos
+                if len(tasks_to_run) < open_slots:
+                    for repo in repos:
+                        executable = [m for m in repo.get("milestones", []) if is_milestone_executable(m, repo)]
+                        for m in executable:
+                            target_f = m.get("relative_filepath", m.get("name"))
+                            m_name = m.get("name")
+                            if target_f not in currently_running_files and m_name not in currently_running_names:
+                                tasks_to_run.append((repo, m, target_f))
+                                currently_running_files.add(target_f)
+                                currently_running_names.add(m_name)
+                                if len(tasks_to_run) >= open_slots:
+                                    break
+                        if len(tasks_to_run) >= open_slots:
+                            break
+
+                # Pass 3: Retry failed tasks if slots still open
+                if len(tasks_to_run) < open_slots:
+                    for repo in repos:
+                        failed_tasks = [m for m in repo.get("milestones", []) if m.get("status") == "failed"]
+                        for m in failed_tasks:
+                            target_f = m.get("relative_filepath", m.get("name"))
+                            m_name = m.get("name")
+                            if target_f not in currently_running_files and m_name not in currently_running_names:
+                                print(f"[*] Auto-Retrying failed milestone: '{m_name}'")
+                                m["status"] = "pending"
+                                tasks_to_run.append((repo, m, target_f))
+                                currently_running_files.add(target_f)
+                                currently_running_names.add(m_name)
+                                if len(tasks_to_run) >= open_slots:
+                                    break
+                        if len(tasks_to_run) >= open_slots:
+                            break
+
+                # Dispatch each task into worker pool
+                for (r, m, tf) in tasks_to_run:
+                    w_idx = len(active_futures)
+                    fut = worker_pool.submit(execute_single_milestone_worker, r, m, repos, _REPOS_GLOBAL_LOCK, w_idx)
+                    active_futures[fut] = (r.get("id"), m.get("name"), tf, w_idx, time.time())
+                    print(f"[*] 🚀 [DISPATCH] Launched '{m.get('name')}' in concurrent worker thread. Active: {len(active_futures)}/{safe_concurrent}")
+
+            # Sleep briefly or wake up immediately when triggered
+            _DISPATCH_TRIGGER.wait(timeout=2.5)
+            _DISPATCH_TRIGGER.clear()
+    except Exception as ee:
+        print(f"[-] Error in executor dispatcher loop: {ee}")
+    finally:
+        worker_pool.shutdown(wait=False)
+    print("[*] Executor Dispatcher Thread stopped.")
+
+def _telemetry_watchdog_daemon_loop():
+    """
+    Independent Watchdog & Telemetry Daemon:
+    Runs in its own decoupled background thread. Checks quota alarms, reconciles ghost tasks,
+    probes health, and executes periodic memory hygiene without blocking execution.
+    """
+    print("[*] 📡 [DAEMON] Telemetry & Self-Healing Watchdog Thread started.")
+    while not _SHUTDOWN_EVENT.is_set():
+        try:
+            # 1. Quota readiness evaluation
+            try:
+                from token_quota_optimizer import evaluate_quota_readiness
+                evaluate_quota_readiness(
+                    executor_model=EXECUTOR_MODEL,
+                    planner_model=PLANNER_MODEL_PRIMARY
+                )
+            except Exception:
+                pass
+
+            # 2. Reconcile ghost in-progress tasks
+            try:
+                repos = load_repositories()
+                reconciled = reconcile_ghost_in_progress_tasks(repos, _REPOS_GLOBAL_LOCK)
+                if reconciled > 0:
+                    print(f"👻 [SELF-HEALING] Reconciled {reconciled} orphaned in-progress task(s).")
+                    _DISPATCH_TRIGGER.set()
+            except Exception:
+                pass
+
+            # 3. Garbage collection
+            try:
+                import gc
+                gc.collect()
+            except Exception:
+                pass
+        except Exception as we:
+            print(f"[-] Error in watchdog daemon loop: {we}")
+
+        _SHUTDOWN_EVENT.wait(timeout=10.0)
+    print("[*] Telemetry Watchdog Thread stopped.")
+
+# ==============================================================================
 # 🔄 MAIN MULTI-REPO COORDINATOR LOOP
 # ==============================================================================
 def run_orchestrator(once: bool = False, planner_only: bool = False, executor_only: bool = False):
@@ -1692,109 +1885,46 @@ def run_orchestrator(once: bool = False, planner_only: bool = False, executor_on
     print(f"   Registry:          {REPOS_FILE}")
     print("=" * 80)
     
-    cycle = 1
-    while True:
-        try:
-            # 1. Token Quota & Readiness Optimizer Assessment
-            try:
-                readiness = evaluate_quota_readiness(
-                    executor_model=EXECUTOR_MODEL,
-                    planner_model=PLANNER_MODEL_PRIMARY
-                )
-            except Exception as qe:
-                readiness = {"can_run": True, "status": "UNKNOWN"}
+    # CLI one-off execution mode (--once, --planner, --executor)
+    if once or planner_only or executor_only:
+        repos = load_repositories()
+        if not repos:
+            print("[-] No repositories found in registry.")
+            return
+        if not executor_only:
+            run_planner_pass(repos)
+        if not planner_only:
+            run_executor_pass(repos)
+        print("\n[*] Single orchestrator pass complete. Exiting.")
+        return
 
-            if not readiness.get("can_run", True):
-                wait_sec = int(readiness.get("seconds_remaining", 180))
-                next_iso = readiness.get("next_run_iso", "soon")
-                print(f"\n[⏳ TOKEN OPTIMIZER ALARM] Insufficient quota or active circuit breaker. Pausing for {round(wait_sec/60, 1)}m until {next_iso}...")
-                notify(f"⏳ *Token Quota Paused*\nAutonomous orchestrator paused until `{next_iso}` for quota recovery.", force=False)
-                
-                # Sleep in 5s increments updating countdown in state file
-                start_w = time.time()
-                while time.time() - start_w < wait_sec:
-                    rem = int(wait_sec - (time.time() - start_w))
-                    readiness["seconds_remaining"] = max(0, rem)
-                    readiness["minutes_remaining"] = round(rem / 60.0, 1)
-                    readiness["alarm_active"] = True
-                    try:
-                        if QUOTA_STATE_FILE:
-                            with open(QUOTA_STATE_FILE, "w", encoding="utf-8") as sf:
-                                json.dump(readiness, sf, indent=2, ensure_ascii=False)
-                    except Exception:
-                        pass
-                    time.sleep(5)
-                
-                print(f"\n[🔔 TOKEN OPTIMIZER ALARM] Countdown reached zero! Re-evaluating quota...")
-                continue
+    # Production Asynchronous Parallel Multi-Daemon Mode
+    threads = [
+        threading.Thread(target=_planner_daemon_loop, name="PlannerDaemon", daemon=True),
+        threading.Thread(target=_executor_dispatcher_daemon_loop, name="ExecutorDispatcher", daemon=True),
+        threading.Thread(target=_telemetry_watchdog_daemon_loop, name="TelemetryWatchdog", daemon=True),
+    ]
 
-            repos = load_repositories()
-            if not repos:
-                print("[-] No repositories found in registry. Sleeping 30s...")
-                time.sleep(30)
-                continue
+    for t in threads:
+        t.start()
 
-            # 0. Startup & Runtime Ghost Task Self-Healing Reconciler
-            try:
-                reconciled = reconcile_ghost_in_progress_tasks(repos, _REPOS_GLOBAL_LOCK)
-                if reconciled > 0:
-                    print(f"👻 [SELF-HEALING] Reconciled {reconciled} orphaned in-progress task(s) from previous crashed/restarted processes.")
-            except Exception as rhe:
-                print(f"[-] Ghost reconciler notice: {rhe}")
+    print("\n" + "=" * 80)
+    print(" 🚀 ALL 3 CONCURRENT FLEET DAEMONS OPERATIONAL & RUNNING IN PARALLEL:")
+    print("   1. [PlannerDaemon]           Independent high-level goal synthesis (Opus / Gemini)")
+    print("   2. [ExecutorDispatcher]      Non-blocking slot-filling worker pool (Gemini 3.8)")
+    print("   3. [TelemetryWatchdog]       Self-healing ghost reconciler, quotas, & telemetry")
+    print("=" * 80 + "\n")
 
-            print(f"\n=================================================================")
-            print(f"▶ Cycle #{cycle}: Orchestrating {len(repos)} Repositories ({datetime.now().strftime('%H:%M:%S')})")
-            print(f"=================================================================")
-            
-            # Mark state as actively executing
-            try:
-                from token_quota_optimizer import STATE_FILE
-                if STATE_FILE.exists():
-                    with open(STATE_FILE, "r", encoding="utf-8") as sf:
-                        curr_state = json.load(sf)
-                    curr_state["status"] = "IN_PROGRESS"
-                    curr_state["status_message"] = f"▶ Cycle #{cycle}: Autonomous execution in progress..."
-                    with open(STATE_FILE, "w", encoding="utf-8") as sf:
-                        json.dump(curr_state, sf, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
-
-            # Step 1: Roaming Opus Planner Pass
-            if not executor_only:
-                run_planner_pass(repos)
-                
-            # Step 2: Prioritized Gemini Executor Pass
-            if not planner_only:
-                run_executor_pass(repos)
-                
-            if once:
-                print("\n[*] Single orchestrator pass complete (--once flag). Exiting.")
-                break
-                
-            cycle += 1
-            print("\n[*] Cycle finished. Cooling down 15s before next pass...")
-            # Periodic Memory Reclamation & Garbage Collection
-            try:
-                import gc
-                gc.collect()
-            except Exception:
-                pass
-            try:
-                from token_quota_optimizer import evaluate_quota_readiness
-                evaluate_quota_readiness(
-                    executor_model=EXECUTOR_MODEL,
-                    planner_model=PLANNER_MODEL_PRIMARY
-                )
-            except Exception:
-                pass
-            time.sleep(15)
-            
-        except KeyboardInterrupt:
-            print("\n[-] Orchestrator paused by user (Ctrl+C). Exiting gracefully.")
-            break
-        except Exception as e:
-            print(f"[!] Encountered error in orchestrator: {e}")
-            time.sleep(30)
+    try:
+        while not _SHUTDOWN_EVENT.is_set():
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n[-] Orchestrator stopping (Ctrl+C). Signaling daemon threads...")
+        _SHUTDOWN_EVENT.set()
+        _DISPATCH_TRIGGER.set()
+        for t in threads:
+            t.join(timeout=3.0)
+        print("[*] Orchestrator exited cleanly.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Universal Multi-Repository Autonomous Orchestrator")
