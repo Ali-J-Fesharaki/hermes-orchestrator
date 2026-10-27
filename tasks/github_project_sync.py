@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 AUTO_DIR = Path(__file__).resolve().parent.parent
 DASHBOARDS_DIR = AUTO_DIR / "dashboards"
@@ -36,6 +36,8 @@ NOTE_CONVERTER = DASHBOARDS_DIR / "note_converter.py"
 
 DEFAULT_OWNER = "Ali-J-Fesharaki"
 DEFAULT_PROJECT_NUMBER = 1
+START_DATE_FIELD_ID = "PVTF_lAHOAtOOcs4Bm_oIzhlmYFY"
+TARGET_DATE_FIELD_ID = "PVTF_lAHOAtOOcs4Bm_oIzhlmYFc"
 
 def get_gh_token() -> str:
     """Retrieves GitHub token via local file, environment or gh CLI."""
@@ -392,6 +394,29 @@ def update_item_status(project_id: str, item_id: str, field_id: str, option_id: 
         "optionId": option_id
     })
 
+def update_item_date(project_id: str, item_id: str, field_id: str, date_str: str) -> dict:
+    """Updates a Date field (Start date / Target date) of an item on GitHub Projects."""
+    mutation = """
+    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $date: Date!) {
+      updateProjectV2ItemFieldValue(input: {
+        projectId: $projectId,
+        itemId: $itemId,
+        fieldId: $fieldId,
+        value: { date: $date }
+      }) {
+        projectV2Item {
+          id
+        }
+      }
+    }
+    """
+    return execute_graphql(mutation, {
+        "projectId": project_id,
+        "itemId": item_id,
+        "fieldId": field_id,
+        "date": date_str
+    })
+
 def set_milestone_github_status(
     milestone_name: str,
     target_status: str,
@@ -426,6 +451,13 @@ def set_milestone_github_status(
             res = update_item_status(project_id, item["item_id"], status_field_id, option_id)
             if "data" in res and res["data"].get("updateProjectV2ItemFieldValue"):
                 print(f"[+] [GitHub Projects] Moved '{item.get('title')}' -> '{target_status}'")
+                
+                # Keep Roadmap timeline dates synced
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                if target_status.lower() == "done":
+                    update_item_date(project_id, item["item_id"], TARGET_DATE_FIELD_ID, today_str)
+                elif target_status.lower() == "in progress":
+                    update_item_date(project_id, item["item_id"], START_DATE_FIELD_ID, today_str)
                 
                 # If target is Done and we have Git / research metadata, enrich the card body!
                 if target_status.lower() == "done" and (commit_hash or branch or articles):
@@ -693,6 +725,11 @@ def reconcile_and_prune_github_projects(owner: str = DEFAULT_OWNER, project_numb
                     opt_id = status_options.get(initial_status.lower())
                     if status_field_id and opt_id:
                         update_item_status(project_id, new_item_id, status_field_id, opt_id)
+                    # Automatically set Start date & Target date for GitHub Roadmap layout
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    target_str = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+                    update_item_date(project_id, new_item_id, START_DATE_FIELD_ID, today_str)
+                    update_item_date(project_id, new_item_id, TARGET_DATE_FIELD_ID, target_str)
                 existing_gh_titles.add(norm_name)
 
     # 3. Save updated repositories.json
