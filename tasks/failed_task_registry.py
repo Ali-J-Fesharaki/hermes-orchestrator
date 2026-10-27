@@ -9,6 +9,8 @@ Stores failed execution tasks with:
   - Structured Tags (e.g. ['latex', 'chapter4', 'xelatex_compilation_error', 'syntax_error'])
   - Failure Category & Exact Error Reason / Stack Trace
   - Model Used & Timestamp
+  - Anti-Pattern ID & Taxonomic Label (from PostMortemPedagogyEngine)
+  - Pedagogical Lesson (Broken Assumption, Countermeasure, Rule of Thumb)
   - Remediation Status ('pending_fix', 'in_progress', 'resolved')
   - Fix Commit Hash & Remediation Notes
 
@@ -16,6 +18,8 @@ Outputs:
   - JSON Registry: dashboards/failed_tasks_registry.json (Machine-readable for agents)
   - Markdown Report: dashboards/FAILED_TASKS_REPORT.md (Agent-readable high-density summary)
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -25,12 +29,26 @@ import hashlib
 import threading
 from pathlib import Path
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 
 AUTO_DIR = Path(__file__).resolve().parent.parent
 DASHBOARDS_DIR = AUTO_DIR / "dashboards"
 FAILED_TASKS_FILE = DASHBOARDS_DIR / "failed_tasks_registry.json"
 FAILED_REPORT_FILE = DASHBOARDS_DIR / "FAILED_TASKS_REPORT.md"
 REPOS_FILE = DASHBOARDS_DIR / "repositories.json"
+
+for _p in [str(AUTO_DIR), str(DASHBOARDS_DIR)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+# Defensive Import of PostMortemPedagogyEngine
+try:
+    from dashboards.post_mortem_pedagogy import PostMortemPedagogyEngine
+except ImportError:
+    try:
+        from post_mortem_pedagogy import PostMortemPedagogyEngine  # type: ignore
+    except ImportError:
+        PostMortemPedagogyEngine = None
 
 _REGISTRY_LOCK = threading.Lock()
 
@@ -42,7 +60,7 @@ def generate_task_id(repo_id: str, milestone_name: str) -> str:
     return f"fail_{clean_repo}_{h}"
 
 
-def infer_tags(repo_id: str, milestone_name: str, target_file: str, failure_reason: str) -> list:
+def infer_tags(repo_id: str, milestone_name: str, target_file: str, failure_reason: str) -> list[str]:
     """
     Infers fine-grained categorical and contextual tags to assist bug-fixing agents:
       - Tech Stack / Domain: latex, python, ros2, drl, costmap, mechatronics, nav2
@@ -123,6 +141,15 @@ class FailedTaskRegistry:
         self.registry_file = FAILED_TASKS_FILE
         self.report_file = FAILED_REPORT_FILE
         DASHBOARDS_DIR.mkdir(parents=True, exist_ok=True)
+        self.pedagogy_engine: Optional[Any] = None
+        if PostMortemPedagogyEngine is not None:
+            try:
+                self.pedagogy_engine = PostMortemPedagogyEngine(
+                    lessons_path=DASHBOARDS_DIR / "architectural_lessons.json",
+                    digest_path=DASHBOARDS_DIR / "ARCHITECTURAL_LESSONS.md",
+                )
+            except Exception:
+                self.pedagogy_engine = None
         self._ensure_init()
 
     def _ensure_init(self):
@@ -131,9 +158,12 @@ class FailedTaskRegistry:
                 "total_recorded_failures": 0,
                 "pending_bugfix_tasks": 0,
                 "resolved_bugfix_tasks": 0,
-                "failures": []
+                "failures": [],
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             self.registry_file.write_text(json.dumps(initial_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        if not self.report_file.exists():
+            self._export_markdown_report(self._load_data())
 
     def _load_data(self) -> dict:
         try:
@@ -159,16 +189,79 @@ class FailedTaskRegistry:
         tmp.replace(self.registry_file)
         self._export_markdown_report(data)
 
-    def record_failure(self, repo_id: str, repo_name: str, milestone_name: str,
-                       failure_reason: str, target_file: str = "", model_used: str = "gemini-3.8-flash-tiered",
-                       github_item_id: str | None = None, hermes_session_id: str | None = None) -> dict:
+    def record_failure(
+        self,
+        repo_id: str,
+        repo_name: str,
+        milestone_name: str,
+        failure_reason: str,
+        target_file: str = "",
+        model_used: str = "gemini-3.8-flash-tiered",
+        github_item_id: Optional[str] = None,
+        hermes_session_id: Optional[str] = None
+    ) -> dict:
         """
-        Records or updates a failed execution task with structured ID, tags, and error context.
+        Records or updates a failed execution task with structured ID, tags, anti-pattern taxonomy,
+        pedagogical remediation lesson, and full error context.
         """
         task_id = generate_task_id(repo_id, milestone_name)
         tags = infer_tags(repo_id, milestone_name, target_file, failure_reason)
         fail_type = classify_failure_type(failure_reason)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Architectural Post-Mortem & Anti-Pattern Analysis
+        anti_pattern_id: Optional[str] = None
+        anti_pattern_label: Optional[str] = None
+        pedagogical_lesson: Optional[Dict[str, str]] = None
+
+        task_payload = {
+            "task_id": task_id,
+            "repo_id": repo_id,
+            "repo_name": repo_name,
+            "milestone_name": milestone_name,
+            "milestone_title": milestone_name,
+            "target_file": target_file,
+            "failure_reason": failure_reason,
+            "failure_type": fail_type,
+            "tags": tags,
+            "model_used": model_used,
+            "github_item_id": github_item_id,
+            "hermes_session_id": hermes_session_id,
+        }
+
+        if self.pedagogy_engine is None and PostMortemPedagogyEngine is not None:
+            try:
+                self.pedagogy_engine = PostMortemPedagogyEngine(
+                    lessons_path=DASHBOARDS_DIR / "architectural_lessons.json",
+                    digest_path=DASHBOARDS_DIR / "ARCHITECTURAL_LESSONS.md",
+                )
+            except Exception:
+                self.pedagogy_engine = None
+
+        if self.pedagogy_engine is not None:
+            try:
+                pm_record = self.pedagogy_engine.analyze_failure(task_payload)
+                if pm_record:
+                    anti_pattern_id = getattr(pm_record, "anti_pattern_id", None)
+                    anti_pattern_label = getattr(pm_record, "anti_pattern_label", None)
+                    lesson_obj = getattr(pm_record, "lesson", None)
+                    if lesson_obj is not None and hasattr(lesson_obj, "to_dict"):
+                        pedagogical_lesson = lesson_obj.to_dict()
+                    elif isinstance(lesson_obj, dict):
+                        pedagogical_lesson = lesson_obj
+                    elif lesson_obj is not None:
+                        pedagogical_lesson = {
+                            "assumption": str(getattr(lesson_obj, "assumption", "")),
+                            "countermeasure": str(getattr(lesson_obj, "countermeasure", "")),
+                            "rule_of_thumb": str(getattr(lesson_obj, "rule_of_thumb", "")),
+                        }
+                    try:
+                        self.pedagogy_engine.save_lessons_json()
+                        self.pedagogy_engine.render_markdown_digest()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         with _REGISTRY_LOCK:
             data = self._load_data()
@@ -193,6 +286,12 @@ class FailedTaskRegistry:
                     existing["github_item_id"] = github_item_id
                 if hermes_session_id:
                     existing["hermes_session_id"] = hermes_session_id
+                if anti_pattern_id:
+                    existing["anti_pattern_id"] = anti_pattern_id
+                if anti_pattern_label:
+                    existing["anti_pattern_label"] = anti_pattern_label
+                if pedagogical_lesson:
+                    existing["pedagogical_lesson"] = pedagogical_lesson
                 if existing.get("status") == "resolved":
                     existing["status"] = "pending_fix"  # Regressed
                 record = existing
@@ -206,6 +305,9 @@ class FailedTaskRegistry:
                     "target_file": target_file,
                     "failure_type": fail_type,
                     "failure_reason": failure_reason,
+                    "anti_pattern_id": anti_pattern_id,
+                    "anti_pattern_label": anti_pattern_label,
+                    "pedagogical_lesson": pedagogical_lesson,
                     "model_used": model_used,
                     "github_item_id": github_item_id,
                     "hermes_session_id": hermes_session_id,
@@ -223,10 +325,11 @@ class FailedTaskRegistry:
                 failures.insert(0, record)
 
             self._save_data(data)
-            print(f"[📌 FAILED TASK RECORDED] ID: `{task_id}` | Tags: {tags} | Reason: {fail_type}")
+            ap_info = f" | Anti-Pattern: {anti_pattern_id}" if anti_pattern_id else ""
+            print(f"[📌 FAILED TASK RECORDED] ID: `{task_id}` | Tags: {tags} | Reason: {fail_type}{ap_info}")
             return record
 
-    def mark_resolved(self, task_id: str, fix_commit_hash: str | None = None, notes: str | None = None, agent_id: str = "bugfix_agent") -> bool:
+    def mark_resolved(self, task_id: str, fix_commit_hash: Optional[str] = None, notes: Optional[str] = None, agent_id: str = "bugfix_agent") -> bool:
         """Marks a previously failed task as resolved by a bug-fixing agent."""
         with _REGISTRY_LOCK:
             data = self._load_data()
@@ -249,7 +352,7 @@ class FailedTaskRegistry:
                 return True
             return False
 
-    def get_pending_tasks(self, tag: str | None = None, repo_id: str | None = None) -> list:
+    def get_pending_tasks(self, tag: Optional[str] = None, repo_id: Optional[str] = None) -> list[dict]:
         """Retrieves pending tasks for consumption by a bug-fixing agent."""
         data = self._load_data()
         results = []
@@ -264,7 +367,7 @@ class FailedTaskRegistry:
         return results
 
     def _export_markdown_report(self, data: dict):
-        """Generates an agent-readable Markdown report for quick inspection."""
+        """Generates an agent-readable Markdown report with pedagogical lessons for quick inspection."""
         failures = data.get("failures", [])
         pending = [f for f in failures if f.get("status") in ["pending_fix", "in_progress"]]
         resolved = [f for f in failures if f.get("status") == "resolved"]
@@ -273,8 +376,8 @@ class FailedTaskRegistry:
             "# 🛠️ Execution Failures & Bugfix Agent Queue",
             f"**Last Updated:** `{data.get('updated_at', 'Now')}` | **Pending Fixes:** `{len(pending)}` | **Resolved:** `{len(resolved)}`",
             "",
-            "This registry records all failed autonomous milestones with unique task IDs, domain tags, and failure traces.",
-            "Autonomous bug-fixing agents can consume tasks from this board and apply atomic fixes.",
+            "This registry records all failed autonomous milestones with unique task IDs, domain tags, pedagogical anti-patterns, and failure traces.",
+            "Autonomous bug-fixing agents can consume tasks from this board and apply atomic fixes informed by pedagogical lessons.",
             "",
             "## 🚨 Pending Remediation Tasks",
             ""
@@ -285,12 +388,29 @@ class FailedTaskRegistry:
         else:
             for item in pending:
                 tags_str = " ".join([f"`#{t}`" for t in item.get("tags", [])])
-                lines.extend([
+                item_lines = [
                     f"### ❌ `{item.get('task_id')}`: {item.get('milestone_name')}",
                     f"- **Repository:** `{item.get('repo_name')}` (`{item.get('repo_id')}`)",
                     f"- **Target File:** `{item.get('target_file') or '—'}`",
                     f"- **Tags:** {tags_str}",
                     f"- **Failure Type:** `{item.get('failure_type')}`",
+                ]
+
+                ap_label = item.get("anti_pattern_label")
+                ap_id = item.get("anti_pattern_id")
+                if ap_label or ap_id:
+                    item_lines.append(f"- **Anti-Pattern Classification:** `{ap_label or ap_id}` (`{ap_id}`)")
+
+                lesson = item.get("pedagogical_lesson")
+                if lesson and isinstance(lesson, dict):
+                    item_lines.extend([
+                        "- **🎓 Pedagogical Lesson & Remediation:**",
+                        f"  - **Broken Assumption:** {lesson.get('assumption', 'N/A')}",
+                        f"  - **Countermeasure:** {lesson.get('countermeasure', 'N/A')}",
+                        f"  - **Rule of Thumb:** {lesson.get('rule_of_thumb', 'N/A')}",
+                    ])
+
+                item_lines.extend([
                     f"- **Attempts:** `{item.get('attempts', 1)}` | **Last Failed:** `{item.get('last_failed_at')}`",
                     f"- **Error Trace / Failure Reason:**",
                     "```text",
@@ -298,6 +418,7 @@ class FailedTaskRegistry:
                     "```",
                     ""
                 ])
+                lines.extend(item_lines)
 
         if resolved:
             lines.extend([
@@ -307,8 +428,9 @@ class FailedTaskRegistry:
             ])
             for item in resolved[:10]:
                 rem = item.get("remediation", {})
+                ap_str = f" [{item.get('anti_pattern_id')}]" if item.get("anti_pattern_id") else ""
                 lines.append(
-                    f"- **`{item.get('task_id')}`** — *{item.get('milestone_name')}* "
+                    f"- **`{item.get('task_id')}`** — *{item.get('milestone_name')}*{ap_str} "
                     f"(Resolved by `{rem.get('assigned_agent')}` in commit `{rem.get('fix_commit_hash')}` at `{rem.get('resolved_at')}`)"
                 )
 
@@ -361,6 +483,7 @@ if __name__ == "__main__":
     count = backfill_from_repositories()
     reg = get_registry()
     data = reg._load_data()
+    reg._export_markdown_report(data)
     print("=" * 75)
     print(" 🛠️ FAILED TASK REGISTRY & BUGFIX QUEUE")
     print("=" * 75)
