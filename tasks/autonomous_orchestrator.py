@@ -53,6 +53,10 @@ for p in [str(AUTO_DIR), str(DASHBOARDS_DIR), str(AUTO_DIR / "tasks")]:
 
 # Import Telemetry & Integrations
 import telemetry
+try:
+    from cadence_manager import get_cadence_manager
+except ImportError:
+    from tasks.cadence_manager import get_cadence_manager
 
 # Arize Phoenix Tracing
 try:
@@ -1130,7 +1134,7 @@ def extract_code_artifact(raw_text: str, target_rel: str) -> str:
 # ==============================================================================
 # ⚡ PRIORITIZED EXECUTOR ENGINE (GEMINI 3.8 FLASH TIERED - CONCURRENT WORKERS)
 # ==============================================================================
-def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, repos: list, repos_lock: Any, worker_index: int = 0) -> bool:
+def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, repos: list, repos_lock: Any, worker_index: int = 0, timeout_s: int = 1500) -> bool:
     """Executes a single milestone for a repository with atomic Git commit."""
     # Stagger dispatch slot through Adaptive Rate Governor
     try:
@@ -1256,7 +1260,7 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
             repo_name=repo_name,
             role=f"Hermes Task Executor ({chosen_executor_model})",
             workdir=repo_path,
-            timeout_s=720
+            timeout_s=timeout_s
         )
         hermes_session_id = usage.get("session_id")
         if hermes_session_id:
@@ -1690,159 +1694,207 @@ def run_executor_pass(repos: list, max_concurrent: int = 3) -> bool:
     return any(results)
 
 # ==============================================================================
-# 🔄 PARALLEL MULTI-DAEMON CONCURRENT ARCHITECTURE
+# 🌐 DECENTRALIZED PER-REPOSITORY AUTONOMOUS ACTOR PODS & FLEET SUPERVISOR
 # ==============================================================================
 
-def _planner_daemon_loop():
+class RepoAutonomousPod:
     """
-    Independent Autonomous Strategic Planner Daemon:
-    Runs in its own decoupled background thread. Roves repositories asynchronously.
-    Synthesizes milestones when buffer slots open without blocking active worker executors.
+    Decentralized Autonomous Actor Pod for an individual repository.
+    Each pod independently manages:
+      1. Dedicated Strategic Planner Thread (Claude Opus / Gemini)
+      2. Dedicated Non-Blocking Worker Pool (Gemini 3.8 Workers)
+      3. Isolated Local ThreadLock and Dispatch Trigger Event
+      4. Dynamic Cadence integration with external CadenceManager
     """
-    print("[*] 🧠 [DAEMON] Strategic Planner Daemon Thread started (Independent Producer).")
-    while not _SHUTDOWN_EVENT.is_set():
-        try:
-            # Check planner quota readiness
+    def __init__(self, repo_id: str):
+        self.repo_id = repo_id
+        self.lock = threading.RLock()
+        self.dispatch_trigger = threading.Event()
+        self.active_futures = {}  # future -> (milestone_name, target_file, worker_index, start_time)
+        self.worker_pool = None
+        self.planner_thread = None
+        self.executor_thread = None
+        self.running = False
+
+    def start(self):
+        self.running = True
+        self.worker_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix=f"worker_{self.repo_id}")
+        self.planner_thread = threading.Thread(target=self._planner_loop, name=f"PlannerPod_{self.repo_id}", daemon=True)
+        self.executor_thread = threading.Thread(target=self._executor_loop, name=f"ExecutorPod_{self.repo_id}", daemon=True)
+        self.planner_thread.start()
+        self.executor_thread.start()
+        print(f"[*] 🚀 [POD STARTED] Dedicated Actor Pod online for repository: '{self.repo_id}'")
+
+    def stop(self):
+        self.running = False
+        self.dispatch_trigger.set()
+        if self.worker_pool:
+            self.worker_pool.shutdown(wait=False)
+
+    def _planner_loop(self):
+        cm = get_cadence_manager()
+        while self.running and not _SHUTDOWN_EVENT.is_set():
             try:
-                readiness = evaluate_quota_readiness(
-                    executor_model=EXECUTOR_MODEL,
-                    planner_model=PLANNER_MODEL_PRIMARY
-                )
-            except Exception:
-                readiness = {"can_run": True}
+                # Check external triggers (e.g. force_plan from external governor)
+                external_wake = cm.consume_trigger(self.repo_id, "wake_planner") or cm.consume_trigger(self.repo_id, "force_plan")
+                
+                # Check dynamic cadence & policy
+                cadence = cm.get_repo_cadence(self.repo_id)
+                if cadence.get("emergency_system_pause") or not cadence.get("auto_planning_enabled", True):
+                    cm.record_repo_event(self.repo_id, state="PAUSED", active_workers=len(self.active_futures), last_action="Planning paused by policy")
+                    _SHUTDOWN_EVENT.wait(timeout=10.0)
+                    continue
 
-            if readiness.get("can_run", True):
                 repos = load_repositories()
-                if repos:
-                    state_changed = run_planner_pass(repos)
-                    if state_changed:
-                        # Immediately wake up executor dispatcher to claim newly synthesized milestones!
-                        _DISPATCH_TRIGGER.set()
-            else:
-                rem_m = readiness.get("minutes_remaining", 5)
-                print(f"[⏳ PLANNER QUOTA PAUSE] Planner paused for {rem_m}m. Will re-evaluate on schedule.")
-        except Exception as pe:
-            print(f"[-] Error in planner daemon loop: {pe}")
+                target_repo = next((r for r in repos if r.get("id") == self.repo_id), None)
+                if target_repo and target_repo.get("auto_planning", True):
+                    milestones = target_repo.get("milestones", [])
+                    queued_waiting = [m for m in milestones if m.get("status") in ("pending", "todo", "ready", "backlog")]
+                    cap = int(target_repo.get("milestone_cap", 3))
 
-        # Sleep 20s or until interrupted
-        _SHUTDOWN_EVENT.wait(timeout=20.0)
-    print("[*] Planner Daemon Thread stopped.")
+                    if len(queued_waiting) < cap or external_wake:
+                        cm.record_repo_event(self.repo_id, state="PLANNING", active_workers=len(self.active_futures), last_action=f"Synthesizing plan (Buffer: {len(queued_waiting)}/{cap})")
+                        state_changed = run_planner_pass([target_repo])
+                        if state_changed:
+                            self.dispatch_trigger.set()
+                            cm.record_repo_event(self.repo_id, state="IDLE", active_workers=len(self.active_futures), last_action="New milestones generated")
+                    else:
+                        cm.record_repo_event(self.repo_id, state="IDLE", active_workers=len(self.active_futures), last_action=f"Buffer full ({len(queued_waiting)}/{cap})")
+            except Exception as e:
+                cm.record_repo_event(self.repo_id, state="ERROR_BACKOFF", last_action=str(e))
+                print(f"[-] [POD: {self.repo_id}] Planner error: {e}")
 
-def _executor_dispatcher_daemon_loop():
-    """
-    Independent Autonomous Executor Dispatcher Daemon:
-    Runs in its own decoupled background thread. Manages an active pool of concurrent workers.
-    Non-blocking: as soon as ANY worker finishes, its slot is immediately filled with the next task.
-    """
-    print("[*] ⚡ [DAEMON] Non-Blocking Worker Dispatcher Thread started (Independent Consumer Pool).")
-    active_futures = {}  # future -> (repo_id, milestone_name, target_file, worker_index, start_time)
-    worker_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="hermes_worker")
+            # Dynamic Cadence sleep (tunable from external supervisor)
+            cadence = cm.get_repo_cadence(self.repo_id)
+            poll_s = float(cadence.get("planner_cadence_s", 20.0))
+            _SHUTDOWN_EVENT.wait(timeout=poll_s)
 
-    try:
-        while not _SHUTDOWN_EVENT.is_set():
-            # 1. Harvest any finished workers
-            finished = [f for f in list(active_futures.keys()) if f.done()]
-            for f in finished:
-                r_id, m_name, t_file, w_idx, st = active_futures.pop(f)
-                elapsed = round(time.time() - st, 1)
-                try:
-                    res = f.result()
-                    res_str = "SUCCESS" if res else "FAILED"
-                    print(f"[*] 🎯 Worker Complete: '{m_name}' ({r_id}) [{res_str}] in {elapsed}s.")
-                except Exception as we:
-                    print(f"[-] Worker Exception for '{m_name}': {we}")
-                # Signal planner that a task finished / slot freed up
-                _DISPATCH_TRIGGER.set()
-
-            # 2. Check Capacity & Concurrency Allocation
+    def _executor_loop(self):
+        cm = get_cadence_manager()
+        while self.running and not _SHUTDOWN_EVENT.is_set():
             try:
-                from capacity_forecaster import get_fleet_capacity_forecast
-                c_fc = get_fleet_capacity_forecast()
-                safe_concurrent = min(3, c_fc.get("recommended_worker_slots", 2))
-            except Exception:
-                safe_concurrent = 2
+                # Check external triggers (e.g. force_dispatch from external governor)
+                cm.consume_trigger(self.repo_id, "wake_executor") or cm.consume_trigger(self.repo_id, "force_dispatch")
+                
+                cadence = cm.get_repo_cadence(self.repo_id)
+                if cadence.get("emergency_system_pause") or not cadence.get("auto_execution_enabled", True):
+                    cm.record_repo_event(self.repo_id, state="PAUSED", active_workers=len(self.active_futures), last_action="Execution paused by policy")
+                    _SHUTDOWN_EVENT.wait(timeout=5.0)
+                    continue
 
-            open_slots = safe_concurrent - len(active_futures)
-            if open_slots > 0:
-                repos = load_repositories()
-                tasks_to_run = []
-                currently_running_files = {t_file for (_, _, t_file, _, _) in active_futures.values()}
-                currently_running_names = {m_name for (_, m_name, _, _, _) in active_futures.values()}
+                # 1. Harvest finished worker futures
+                finished = [f for f in list(self.active_futures.keys()) if f.done()]
+                for f in finished:
+                    m_name, t_file, w_idx, st = self.active_futures.pop(f)
+                    elapsed = round(time.time() - st, 1)
+                    try:
+                        res = f.result()
+                        res_str = "SUCCESS" if res else "FAILED"
+                        print(f"[*] 🎯 [POD: {self.repo_id}] Worker Complete: '{m_name}' [{res_str}] in {elapsed}s.")
+                    except Exception as ex:
+                        print(f"[-] [POD: {self.repo_id}] Worker Exception: {ex}")
+                    # Signal planner that a task slot was freed
+                    self.dispatch_trigger.set()
 
-                # Pass 1: Select 1 executable task per repo (fair multi-repo balance)
-                for repo in repos:
-                    executable = [m for m in repo.get("milestones", []) if is_milestone_executable(m, repo)]
-                    for m in executable:
-                        target_f = m.get("relative_filepath", m.get("name"))
-                        m_name = m.get("name")
-                        if target_f not in currently_running_files and m_name not in currently_running_names:
-                            tasks_to_run.append((repo, m, target_f))
-                            currently_running_files.add(target_f)
-                            currently_running_names.add(m_name)
-                            break
-                    if len(tasks_to_run) >= open_slots:
-                        break
+                # 2. Check open concurrency slots for this repo
+                max_w = int(cadence.get("max_workers", 2))
+                open_slots = max_w - len(self.active_futures)
 
-                # Pass 2: Fill remaining open slots across repos
-                if len(tasks_to_run) < open_slots:
-                    for repo in repos:
-                        executable = [m for m in repo.get("milestones", []) if is_milestone_executable(m, repo)]
+                if open_slots > 0:
+                    repos = load_repositories()
+                    target_repo = next((r for r in repos if r.get("id") == self.repo_id), None)
+                    if target_repo:
+                        executable = [m for m in target_repo.get("milestones", []) if is_milestone_executable(m, target_repo)]
+                        running_files = {tf for (_, tf, _, _) in self.active_futures.values()}
+                        running_names = {mn for (mn, _, _, _) in self.active_futures.values()}
+
+                        tasks_to_launch = []
                         for m in executable:
                             target_f = m.get("relative_filepath", m.get("name"))
                             m_name = m.get("name")
-                            if target_f not in currently_running_files and m_name not in currently_running_names:
-                                tasks_to_run.append((repo, m, target_f))
-                                currently_running_files.add(target_f)
-                                currently_running_names.add(m_name)
-                                if len(tasks_to_run) >= open_slots:
+                            if target_f not in running_files and m_name not in running_names:
+                                tasks_to_launch.append(m)
+                                running_files.add(target_f)
+                                running_names.add(m_name)
+                                if len(tasks_to_launch) >= open_slots:
                                     break
-                        if len(tasks_to_run) >= open_slots:
-                            break
 
-                # Pass 3: Retry failed tasks if slots still open
-                if len(tasks_to_run) < open_slots:
-                    for repo in repos:
-                        failed_tasks = [m for m in repo.get("milestones", []) if m.get("status") == "failed"]
-                        for m in failed_tasks:
+                        # Retry failed milestones if slots are open
+                        if len(tasks_to_launch) < open_slots:
+                            failed_tasks = [m for m in target_repo.get("milestones", []) if m.get("status") == "failed"]
+                            for m in failed_tasks:
+                                target_f = m.get("relative_filepath", m.get("name"))
+                                m_name = m.get("name")
+                                if target_f not in running_files and m_name not in running_names:
+                                    m["status"] = "pending"
+                                    tasks_to_launch.append(m)
+                                    running_files.add(target_f)
+                                    running_names.add(m_name)
+                                    if len(tasks_to_launch) >= open_slots:
+                                        break
+
+                        for m in tasks_to_launch:
                             target_f = m.get("relative_filepath", m.get("name"))
-                            m_name = m.get("name")
-                            if target_f not in currently_running_files and m_name not in currently_running_names:
-                                print(f"[*] Auto-Retrying failed milestone: '{m_name}'")
-                                m["status"] = "pending"
-                                tasks_to_run.append((repo, m, target_f))
-                                currently_running_files.add(target_f)
-                                currently_running_names.add(m_name)
-                                if len(tasks_to_run) >= open_slots:
-                                    break
-                        if len(tasks_to_run) >= open_slots:
-                            break
+                            w_idx = len(self.active_futures)
+                            timeout_s = int(cadence.get("timeout_s", 1500))
+                            fut = self.worker_pool.submit(execute_single_milestone_worker, target_repo, m, repos, self.lock, w_idx, timeout_s)
+                            self.active_futures[fut] = (m.get("name"), target_f, w_idx, time.time())
+                            cm.record_repo_event(self.repo_id, state="EXECUTING", active_workers=len(self.active_futures), last_action=f"Launched: {m.get('name')[:35]}")
+                            print(f"[*] 🚀 [POD: {self.repo_id}] Launched task '{m.get('name')}' (Active: {len(self.active_futures)}/{max_w})")
+            except Exception as ee:
+                cm.record_repo_event(self.repo_id, state="ERROR_BACKOFF", last_action=str(ee))
+                print(f"[-] [POD: {self.repo_id}] Executor error: {ee}")
 
-                # Dispatch each task into worker pool
-                for (r, m, tf) in tasks_to_run:
-                    w_idx = len(active_futures)
-                    fut = worker_pool.submit(execute_single_milestone_worker, r, m, repos, _REPOS_GLOBAL_LOCK, w_idx)
-                    active_futures[fut] = (r.get("id"), m.get("name"), tf, w_idx, time.time())
-                    print(f"[*] 🚀 [DISPATCH] Launched '{m.get('name')}' in concurrent worker thread. Active: {len(active_futures)}/{safe_concurrent}")
+            # Dynamic Cadence poll or wake on trigger
+            cadence = cm.get_repo_cadence(self.repo_id)
+            poll_s = float(cadence.get("executor_cadence_s", 2.0))
+            self.dispatch_trigger.wait(timeout=poll_s)
+            self.dispatch_trigger.clear()
 
-            # Sleep briefly or wake up immediately when triggered
-            _DISPATCH_TRIGGER.wait(timeout=2.5)
-            _DISPATCH_TRIGGER.clear()
-    except Exception as ee:
-        print(f"[-] Error in executor dispatcher loop: {ee}")
-    finally:
-        worker_pool.shutdown(wait=False)
-    print("[*] Executor Dispatcher Thread stopped.")
+ACTIVE_PODS: dict[str, RepoAutonomousPod] = {}
 
-def _telemetry_watchdog_daemon_loop():
+def _fleet_supervisor_loop():
     """
-    Independent Watchdog & Telemetry Daemon:
-    Runs in its own decoupled background thread. Checks quota alarms, reconciles ghost tasks,
-    probes health, and executes periodic memory hygiene without blocking execution.
+    Decentralized Fleet Supervisor Daemon:
+    Spawns, maintains, and scales dedicated RepoAutonomousPod actors per repository.
+    Runs global telemetry, quota evaluations, and self-healing ghost reconciler.
     """
-    print("[*] 📡 [DAEMON] Telemetry & Self-Healing Watchdog Thread started.")
+    print("[*] 🌐 [FLEET SUPERVISOR] Decentralized Multi-Repo Fleet Supervisor online.")
+    cm = get_cadence_manager()
+
     while not _SHUTDOWN_EVENT.is_set():
         try:
-            # 1. Quota readiness evaluation
+            repos = load_repositories()
+            active_rids = set()
+
+            for repo in repos:
+                rid = repo.get("id")
+                if not rid:
+                    continue
+                active_rids.add(rid)
+
+                # Spawn dedicated actor pod for this repository if not already running
+                if rid not in ACTIVE_PODS:
+                    pod = RepoAutonomousPod(rid)
+                    ACTIVE_PODS[rid] = pod
+                    pod.start()
+
+            # Clean up pods for removed repositories
+            removed = [rid for rid in list(ACTIVE_PODS.keys()) if rid not in active_rids]
+            for rid in removed:
+                print(f"[*] [FLEET SUPERVISOR] Decommissioning pod for repository '{rid}'")
+                ACTIVE_PODS[rid].stop()
+                del ACTIVE_PODS[rid]
+
+            # Global Ghost Task Self-Healing
+            try:
+                reconciled = reconcile_ghost_in_progress_tasks(repos, _REPOS_GLOBAL_LOCK)
+                if reconciled > 0:
+                    print(f"👻 [SELF-HEALING] Reconciled {reconciled} orphaned in-progress task(s).")
+            except Exception:
+                pass
+
+            # Quota readiness check
             try:
                 from token_quota_optimizer import evaluate_quota_readiness
                 evaluate_quota_readiness(
@@ -1852,39 +1904,36 @@ def _telemetry_watchdog_daemon_loop():
             except Exception:
                 pass
 
-            # 2. Reconcile ghost in-progress tasks
-            try:
-                repos = load_repositories()
-                reconciled = reconcile_ghost_in_progress_tasks(repos, _REPOS_GLOBAL_LOCK)
-                if reconciled > 0:
-                    print(f"👻 [SELF-HEALING] Reconciled {reconciled} orphaned in-progress task(s).")
-                    _DISPATCH_TRIGGER.set()
-            except Exception:
-                pass
-
-            # 3. Garbage collection
+            # Garbage Collection
             try:
                 import gc
                 gc.collect()
             except Exception:
                 pass
-        except Exception as we:
-            print(f"[-] Error in watchdog daemon loop: {we}")
+
+        except Exception as fe:
+            print(f"[-] Error in fleet supervisor loop: {fe}")
 
         _SHUTDOWN_EVENT.wait(timeout=10.0)
-    print("[*] Telemetry Watchdog Thread stopped.")
+    
+    # Clean shutdown of all pods
+    for rid, pod in list(ACTIVE_PODS.items()):
+        pod.stop()
+    print("[*] Fleet Supervisor stopped.")
 
 # ==============================================================================
-# 🔄 MAIN MULTI-REPO COORDINATOR LOOP
+# 🔄 MAIN MULTI-REPO COORDINATOR ENTRYPOINT
 # ==============================================================================
 def run_orchestrator(once: bool = False, planner_only: bool = False, executor_only: bool = False):
     print("=" * 80)
     print(" 🚀 UNIVERSAL MULTI-REPOSITORY AUTONOMOUS ORCHESTRATOR")
+    print(f"   Architecture:      Decentralized Per-Repository Actor Pods")
     print(f"   Strategic Planner: {PLANNER_MODEL_PRIMARY} (Fallback: {PLANNER_MODEL_FALLBACK})")
     print(f"   Task Executor:     {EXECUTOR_MODEL}")
     print(f"   Registry:          {REPOS_FILE}")
+    print(f"   Cadence Control:   {DASHBOARDS_DIR / 'cadence_state.json'}")
     print("=" * 80)
-    
+
     # CLI one-off execution mode (--once, --planner, --executor)
     if once or planner_only or executor_only:
         repos = load_repositories()
@@ -1898,33 +1947,25 @@ def run_orchestrator(once: bool = False, planner_only: bool = False, executor_on
         print("\n[*] Single orchestrator pass complete. Exiting.")
         return
 
-    # Production Asynchronous Parallel Multi-Daemon Mode
-    threads = [
-        threading.Thread(target=_planner_daemon_loop, name="PlannerDaemon", daemon=True),
-        threading.Thread(target=_executor_dispatcher_daemon_loop, name="ExecutorDispatcher", daemon=True),
-        threading.Thread(target=_telemetry_watchdog_daemon_loop, name="TelemetryWatchdog", daemon=True),
-    ]
-
-    for t in threads:
-        t.start()
+    # Production Decentralized Fleet Supervisor Mode
+    supervisor_thread = threading.Thread(target=_fleet_supervisor_loop, name="FleetSupervisor", daemon=True)
+    supervisor_thread.start()
 
     print("\n" + "=" * 80)
-    print(" 🚀 ALL 3 CONCURRENT FLEET DAEMONS OPERATIONAL & RUNNING IN PARALLEL:")
-    print("   1. [PlannerDaemon]           Independent high-level goal synthesis (Opus / Gemini)")
-    print("   2. [ExecutorDispatcher]      Non-blocking slot-filling worker pool (Gemini 3.8)")
-    print("   3. [TelemetryWatchdog]       Self-healing ghost reconciler, quotas, & telemetry")
+    print(" 🚀 DECENTRALIZED MULTI-REPO FLEET RUNTIME INITIALIZED:")
+    print("   • Each active repository runs its own dedicated Planner & Executor Pod")
+    print("   • Cloud Token Multiplexing handled concurrently via Antigravity Router (8045/7836)")
+    print("   • Dynamic Cadence & External Control Plane active at dashboards/cadence_state.json")
     print("=" * 80 + "\n")
 
     try:
         while not _SHUTDOWN_EVENT.is_set():
             time.sleep(1.0)
     except KeyboardInterrupt:
-        print("\n[-] Orchestrator stopping (Ctrl+C). Signaling daemon threads...")
+        print("\n[-] Orchestrator stopping (Ctrl+C). Signaling fleet pods...")
         _SHUTDOWN_EVENT.set()
-        _DISPATCH_TRIGGER.set()
-        for t in threads:
-            t.join(timeout=3.0)
-        print("[*] Orchestrator exited cleanly.")
+        supervisor_thread.join(timeout=3.0)
+        print("[*] All fleet actor pods decommissioned cleanly.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Universal Multi-Repository Autonomous Orchestrator")

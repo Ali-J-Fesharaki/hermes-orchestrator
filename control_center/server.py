@@ -112,8 +112,25 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_performance_benchmark()
         elif parsed.path == "/api/repository_evolution":
             self.handle_repository_evolution(parsed)
+        elif parsed.path == "/api/cadence":
+            self.handle_get_cadence()
         else:
             super().do_GET()
+
+    def handle_get_cadence(self):
+        try:
+            try:
+                from tasks.cadence_manager import get_cadence_manager
+            except ImportError:
+                from cadence_manager import get_cadence_manager  # type: ignore
+            data = get_cadence_manager().get_full_control_state()
+        except Exception as e:
+            data = {"error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_repository_evolution(self, parsed):
         from urllib.parse import parse_qs
@@ -308,8 +325,36 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_supervisor_audit_now()
         elif parsed.path == "/api/repository_evolution/steer":
             self.handle_repository_evolution_steer(payload)
+        elif parsed.path == "/api/cadence/tune":
+            self.handle_cadence_tune(payload)
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_cadence_tune(self, payload):
+        repo_id = payload.get("repo_id", "")
+        params = payload.get("parameters", {})
+        trigger = payload.get("trigger", "")
+        try:
+            try:
+                from tasks.cadence_manager import get_cadence_manager
+            except ImportError:
+                from cadence_manager import get_cadence_manager  # type: ignore
+            cm = get_cadence_manager()
+            res = {}
+            if repo_id and params:
+                res["tuned"] = cm.tune_repo_cadence(repo_id, params)
+            if repo_id and trigger:
+                cm.emit_trigger(repo_id, trigger)
+                res["triggered"] = trigger
+            res["status"] = "ok"
+        except Exception as e:
+            res = {"status": "error", "error": str(e)}
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
 
     def handle_repository_evolution_steer(self, payload):
         repo_id = payload.get("repo_id", "hermes_orchestrator")
