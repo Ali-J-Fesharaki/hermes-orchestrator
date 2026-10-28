@@ -2395,7 +2395,9 @@
       document.getElementById('count-inprogress').innerText = cInprog;
       document.getElementById('count-inreview').innerText = cInreview;
 
-      const totalArchived = repos.reduce((acc, r) => acc + (r.archived_count || r.total_archived_milestones || 0), 0);
+      const allRepos = globalData.repositories || [];
+      const relevantRepos = filter === 'all' ? allRepos : allRepos.filter(r => r.id === filter);
+      const totalArchived = relevantRepos.reduce((acc, r) => acc + (r.archived_count || r.total_archived_milestones || 0), 0);
       document.getElementById('count-done').innerText = totalArchived > 0 ? `${cDone} (+${totalArchived} archived)` : cDone;
 
       // Append interactive Archive Explorer card if there are archived deliverables
@@ -4009,10 +4011,11 @@
     let currentArchiveOffset = 0;
     const ARCHIVE_PAGE_LIMIT = 20;
 
+    let inlineArchivedOffset = 0;
     async function loadMoreArchivedCards(count = 10) {
       try {
         const repoFilter = document.getElementById('repo-filter')?.value || 'all';
-        const resp = await fetch(`/api/archive?repo=${repoFilter}&offset=0&limit=${count}`);
+        const resp = await fetch(`/api/archive?repo=${encodeURIComponent(repoFilter)}&offset=${inlineArchivedOffset}&limit=${count}`);
         const data = await resp.json();
         const colDone = document.getElementById('col-done');
         if (!colDone || !data.milestones || data.milestones.length === 0) {
@@ -4020,17 +4023,20 @@
           return;
         }
 
+        inlineArchivedOffset += data.milestones.length;
         data.milestones.forEach(m => {
           const card = document.createElement('div');
-          card.className = "card-kanban p-3 rounded-xl border border-dashed border-slate-700 bg-slate-900/70 text-xs space-y-1.5 opacity-90 hover:opacity-100 transition";
+          card.className = "card-kanban p-3.5 rounded-xl border border-slate-700/80 bg-slate-900/90 text-xs space-y-2 shadow-sm transition hover:border-emerald-500/50";
           card.innerHTML = `
-            <div class="flex items-center justify-between gap-1 text-[10px] text-slate-400 font-mono">
-              <span class="px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-semibold">[Archived] ${m.repo_id}</span>
-              <span class="text-emerald-400"><i class="fa-solid fa-circle-check"></i> Done</span>
+            <div class="flex items-center justify-between gap-1 text-[10px] font-mono">
+              <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">[Archived] ${m.repo_id}</span>
+              <span class="text-emerald-400 flex items-center gap-1 font-semibold"><i class="fa-solid fa-circle-check"></i> Done</span>
             </div>
-            <p class="font-bold text-slate-200 text-xs">${m.name}</p>
-            <p class="text-slate-400 text-[11px] line-clamp-1">${m.details || ''}</p>
-            <div class="text-[10px] font-mono text-slate-500 truncate"><i class="fa-regular fa-file-code mr-1"></i>${m.relative_filepath || ''}</div>
+            <p class="font-bold text-slate-100 text-xs leading-snug">${m.name}</p>
+            <p class="text-slate-400 text-[11px] leading-relaxed line-clamp-2">${m.details || ''}</p>
+            <div class="text-[10px] font-mono text-slate-500 truncate pt-1 border-t border-slate-800/80">
+              <i class="fa-regular fa-file-code mr-1"></i>${m.relative_filepath || ''}
+            </div>
           `;
           colDone.insertBefore(card, colDone.lastElementChild);
         });
