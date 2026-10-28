@@ -2230,7 +2230,9 @@
       document.getElementById('count-ready').innerText = cReady;
       document.getElementById('count-inprogress').innerText = cInprog;
       document.getElementById('count-inreview').innerText = cInreview;
-      document.getElementById('count-done').innerText = cDone;
+
+      const totalArchived = repos.reduce((acc, r) => acc + (r.archived_count || r.total_archived_milestones || 0), 0);
+      document.getElementById('count-done').innerText = totalArchived > 0 ? `${cDone} (+${totalArchived} archived)` : cDone;
     }
 
     function renderRepos() {

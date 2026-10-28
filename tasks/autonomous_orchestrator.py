@@ -510,6 +510,56 @@ def load_repositories() -> list:
         repos.sort(key=lambda r: r.get("priority", 99))
         return repos
 
+ARCHIVE_FILE = DASHBOARDS_DIR / "repositories_archive.json"
+
+def archive_completed_milestones(repos: list, max_completed_keep: int = 5):
+    """
+    Safely archives completed milestones into repositories_archive.json
+    so repositories.json stays lean (<100KB) and dashboards load instantly.
+    """
+    try:
+        archive_data = {"repositories": {}, "last_archived_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        if ARCHIVE_FILE.exists():
+            try:
+                with open(ARCHIVE_FILE, "r", encoding="utf-8") as af:
+                    archive_data = json.load(af)
+            except Exception:
+                pass
+        
+        arch_repos = archive_data.setdefault("repositories", {})
+        
+        for repo in repos:
+            rid = repo.get("id")
+            if not rid:
+                continue
+            ms = repo.get("milestones", [])
+            completed = [m for m in ms if m.get("status") == "completed"]
+            active = [m for m in ms if m.get("status") != "completed"]
+            
+            if len(completed) > max_completed_keep:
+                keep = completed[-max_completed_keep:]
+                to_archive = completed[:-max_completed_keep]
+                
+                arch_list = arch_repos.setdefault(rid, [])
+                known_names = {m.get("name") for m in arch_list if m.get("name")}
+                for m in to_archive:
+                    if m.get("name") not in known_names:
+                        arch_list.append(m)
+                        known_names.add(m.get("name"))
+                
+                repo["milestones"] = active + keep
+                repo["archived_count"] = len(arch_list)
+            else:
+                repo["archived_count"] = len(arch_repos.get(rid, []))
+                
+        temp_af = ARCHIVE_FILE.with_suffix(".tmp")
+        with open(temp_af, "w", encoding="utf-8") as af:
+            json.dump(archive_data, af, indent=2, ensure_ascii=False)
+            af.write("\n")
+        temp_af.replace(ARCHIVE_FILE)
+    except Exception as e:
+        print(f"[-] Warning: Failed to archive completed milestones: {e}")
+
 def save_repositories(repos: list):
     """
     Atomically writes back the updated repositories registry preserving metadata,
@@ -578,6 +628,8 @@ def save_repositories(repos: list):
                     repos.append(er)
                     in_memory_ids[er_id] = er
                     
+            # Automatically archive older completed milestones to keep repositories.json lean and fast (<100KB)
+            archive_completed_milestones(repos)
             existing_data["repositories"] = repos
             
             # Isolated Temporary File Protocol:
