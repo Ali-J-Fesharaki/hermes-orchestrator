@@ -29,6 +29,12 @@ import threading
 import concurrent.futures
 import urllib.request
 import urllib.error
+import contextlib
+import random
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, Tuple, List, Dict, Optional
@@ -37,6 +43,7 @@ from typing import Any, Union, Tuple, List, Dict, Optional
 AUTO_DIR = Path(__file__).resolve().parent.parent
 DASHBOARDS_DIR = AUTO_DIR / "dashboards"
 REPOS_FILE = DASHBOARDS_DIR / "repositories.json"
+REPOS_LOCK_FILE = DASHBOARDS_DIR / ".repositories.json.lock"
 ROUTER_URL = os.environ.get("ROUTER_URL", "http://127.0.0.1:8045/v1/chat/completions")
 ENV_FILE = Path.home() / ".hermes/.env"
 NOTIFIER = AUTO_DIR / "telegram_notifier.py"
@@ -435,6 +442,51 @@ _REPOS_GLOBAL_LOCK = threading.RLock()
 _DISPATCH_TRIGGER = threading.Event()
 _SHUTDOWN_EVENT = threading.Event()
 
+@contextlib.contextmanager
+def _repositories_file_lock(max_retries: int = 5, base_delay: float = 0.05, max_delay: float = 0.25):
+    """
+    Advisory file lock on .repositories.json.lock to prevent simultaneous interleaving writes
+    across concurrent processes and threads.
+    Retries up to max_retries with exponential backoff and randomized jitter.
+    """
+    if fcntl is None:
+        yield
+        return
+
+    REPOS_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = None
+    acquired = False
+    try:
+        lock_fd = os.open(str(REPOS_LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o666)
+        for attempt in range(max_retries):
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except (BlockingIOError, OSError):
+                if attempt == max_retries - 1:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                        acquired = True
+                    except Exception as e:
+                        print(f"[-] Warning: Advisory lock fallback failed for {REPOS_LOCK_FILE}: {e}")
+                    break
+                jitter = random.uniform(0.01, 0.05)
+                backoff = min(max_delay, base_delay * (1.5 ** attempt)) + jitter
+                time.sleep(backoff)
+        yield
+    finally:
+        if lock_fd is not None:
+            if acquired:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+
 def load_repositories() -> list:
     """Loads and returns all repositories sorted by priority (1, 2, 3...)."""
     with _REPOS_GLOBAL_LOCK:
@@ -445,11 +497,16 @@ def load_repositories() -> list:
                 shutil.copyfile(example_file, REPOS_FILE)
             else:
                 return []
-        try:
-            with open(REPOS_FILE, "r", encoding="utf-8") as f:
-                repos = json.load(f).get("repositories", [])
-        except Exception:
-            return []
+        repos = []
+        for attempt in range(3):
+            try:
+                with open(REPOS_FILE, "r", encoding="utf-8") as f:
+                    repos = json.load(f).get("repositories", [])
+                break
+            except Exception:
+                if attempt == 2:
+                    return []
+                time.sleep(0.05)
         repos.sort(key=lambda r: r.get("priority", 99))
         return repos
 
@@ -460,74 +517,105 @@ def save_repositories(repos: list):
     from disk (e.g. auto_planning, auto_approve_plans, milestone approvals).
     """
     with _REPOS_GLOBAL_LOCK:
-        repos_file = REPOS_FILE
-        existing_data = {}
-        if repos_file.exists():
-            try:
-                with open(repos_file, "r", encoding="utf-8") as f:
-                    existing_data = json.load(f)
-            except Exception:
-                pass
-                
-        # Filter out any repositories explicitly removed by the user in the Web UI
-        removed_ids = set(existing_data.get("removed_repositories", []))
-        repos[:] = [r for r in repos if r.get("id") not in removed_ids and r.get("name") not in removed_ids]
-
-        existing_repos = existing_data.get("repositories", [])
-        disk_repo_map = {r.get("id"): r for r in existing_repos if r.get("id")}
-        in_memory_ids = {r.get("id"): r for r in repos if r.get("id")}
-
-        # 1. Synchronize user-controlled configurations from disk into in-memory repos before saving
-        for repo in repos:
-            rid = repo.get("id")
-            if rid in disk_repo_map:
-                dr = disk_repo_map[rid]
-                # Always respect user's manual toggles from disk:
-                repo["auto_planning"] = dr.get("auto_planning", repo.get("auto_planning", True))
-                repo["auto_approve_plans"] = dr.get("auto_approve_plans", repo.get("auto_approve_plans", False))
-                repo["planner_model"] = dr.get("planner_model", repo.get("planner_model"))
-                repo["executor_model"] = dr.get("executor_model", repo.get("executor_model"))
-                repo["milestone_cap"] = dr.get("milestone_cap", repo.get("milestone_cap", 3))
-                repo["priority"] = dr.get("priority", repo.get("priority", 99))
-                
-                # For milestones that are NOT actively executing in-progress, respect user approvals from disk
-                disk_milestones = {m.get("name"): m for m in dr.get("milestones", []) if m.get("name")}
-                for m in repo.get("milestones", []):
-                    mname = m.get("name")
-                    if mname in disk_milestones:
-                        dm = disk_milestones[mname]
-                        if dm.get("skills"):
-                            m["skills"] = dm["skills"]
-                        if m.get("status") not in ("in_progress", "completed"):
-                            m["approved_for_auto_run"] = dm.get("approved_for_auto_run", False)
-                            m["status"] = dm.get("status", m.get("status"))
-                            m["github_column"] = dm.get("github_column", m.get("github_column"))
-
-                # Ensure all milestones have their top 3 authoritative skills assigned
+        with _repositories_file_lock():
+            repos_file = REPOS_FILE
+            existing_data = {}
+            if repos_file.exists():
                 try:
-                    from tasks.skill_matcher import infer_task_skills
-                    for m in repo.get("milestones", []):
-                        curr_s = m.get("skills")
-                        if not isinstance(curr_s, list) or len(curr_s) < 3:
-                            m["skills"] = infer_task_skills(m, rid, repo.get("category", ""))
+                    with open(repos_file, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
                 except Exception:
                     pass
+                    
+            # Filter out any repositories explicitly removed by the user in the Web UI
+            removed_ids = set(existing_data.get("removed_repositories", []))
+            repos[:] = [r for r in repos if r.get("id") not in removed_ids and r.get("name") not in removed_ids]
 
-        # 2. Merge newly added on-disk repositories that might have been added by user/API while orchestrator was running
-        for er in existing_repos:
-            er_id = er.get("id")
-            if er_id and er_id not in in_memory_ids and er_id not in removed_ids:
-                repos.append(er)
-                in_memory_ids[er_id] = er
-                
-        existing_data["repositories"] = repos
-        
-        # Atomic write via tempfile to avoid race conditions or half-written files
-        temp_path = repos_file.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(existing_data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        temp_path.replace(repos_file)
+            existing_repos = existing_data.get("repositories", [])
+            disk_repo_map = {r.get("id"): r for r in existing_repos if r.get("id")}
+            in_memory_ids = {r.get("id"): r for r in repos if r.get("id")}
+
+            # 1. Synchronize user-controlled configurations from disk into in-memory repos before saving
+            for repo in repos:
+                rid = repo.get("id")
+                if rid in disk_repo_map:
+                    dr = disk_repo_map[rid]
+                    # Always respect user's manual toggles from disk:
+                    repo["auto_planning"] = dr.get("auto_planning", repo.get("auto_planning", True))
+                    repo["auto_approve_plans"] = dr.get("auto_approve_plans", repo.get("auto_approve_plans", False))
+                    repo["planner_model"] = dr.get("planner_model", repo.get("planner_model"))
+                    repo["executor_model"] = dr.get("executor_model", repo.get("executor_model"))
+                    repo["milestone_cap"] = dr.get("milestone_cap", repo.get("milestone_cap", 3))
+                    repo["priority"] = dr.get("priority", repo.get("priority", 99))
+                    
+                    # For milestones that are NOT actively executing in-progress, respect user approvals from disk
+                    disk_milestones = {m.get("name"): m for m in dr.get("milestones", []) if m.get("name")}
+                    for m in repo.get("milestones", []):
+                        mname = m.get("name")
+                        if mname in disk_milestones:
+                            dm = disk_milestones[mname]
+                            if dm.get("skills"):
+                                m["skills"] = dm["skills"]
+                            if m.get("status") not in ("in_progress", "completed"):
+                                m["approved_for_auto_run"] = dm.get("approved_for_auto_run", False)
+                                m["status"] = dm.get("status", m.get("status"))
+                                m["github_column"] = dm.get("github_column", m.get("github_column"))
+
+                    # Ensure all milestones have their top 3 authoritative skills assigned
+                    try:
+                        from tasks.skill_matcher import infer_task_skills
+                        for m in repo.get("milestones", []):
+                            curr_s = m.get("skills")
+                            if not isinstance(curr_s, list) or len(curr_s) < 3:
+                                m["skills"] = infer_task_skills(m, rid, repo.get("category", ""))
+                    except Exception:
+                        pass
+
+            # 2. Merge newly added on-disk repositories that might have been added by user/API while orchestrator was running
+            for er in existing_repos:
+                er_id = er.get("id")
+                if er_id and er_id not in in_memory_ids and er_id not in removed_ids:
+                    repos.append(er)
+                    in_memory_ids[er_id] = er
+                    
+            existing_data["repositories"] = repos
+            
+            # Isolated Temporary File Protocol:
+            # Construct unique, hidden temporary file in the same directory (ensuring atomic same-filesystem rename)
+            repos_file.parent.mkdir(parents=True, exist_ok=True)
+            tf = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=repos_file.parent,
+                prefix=f".{repos_file.name}.tmp_{os.getpid()}_{threading.get_ident()}_",
+                suffix=".tmp",
+                delete=False,
+            )
+            temp_path = Path(tf.name)
+            try:
+                json.dump(existing_data, tf, indent=2, ensure_ascii=False)
+                tf.write("\n")
+                tf.flush()
+                os.fsync(tf.fileno())
+                tf.close()
+
+                # Retry guard around os.replace() catching OSError/FileNotFoundError with exponential backoff
+                max_replace_retries = 5
+                for rep_attempt in range(max_replace_retries):
+                    try:
+                        os.replace(temp_path, repos_file)
+                        temp_path = None
+                        break
+                    except (OSError, FileNotFoundError) as e:
+                        if rep_attempt == max_replace_retries - 1:
+                            raise
+                        time.sleep(0.05 * (2 ** rep_attempt) + random.uniform(0.01, 0.05))
+            finally:
+                if temp_path and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except Exception:
+                        pass
 
 def get_repo_git_state(repo_path: Path) -> dict:
     if not repo_path.exists() or not (repo_path / ".git").exists():
@@ -1436,7 +1524,10 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
                     target_milestone["hermes_session_id"] = hermes_session_id
                 if failed_task_rec:
                     target_milestone["failure_task_id"] = failed_task_rec.get("task_id")
-                save_repositories(repos)
+                try:
+                    save_repositories(repos)
+                except Exception as s_err:
+                    print(f"[-] Warning: Failed to persist failed milestone state: {s_err}")
             try:
                 gh_sync.set_milestone_github_status(milestone_name, "In review")
             except Exception:
@@ -1532,7 +1623,18 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
             except Exception:
                 pass
 
-            save_repositories(repos)
+            # Defensive persistence retry to guard milestone completion against filesystem contention
+            saved = False
+            for save_attempt in range(5):
+                try:
+                    save_repositories(repos)
+                    saved = True
+                    break
+                except Exception as ex:
+                    print(f"[-] Warning: Transient failure in save_repositories during milestone completion (attempt {save_attempt + 1}/5): {ex}")
+                    time.sleep(0.1 * (2 ** save_attempt) + random.uniform(0.02, 0.08))
+            if not saved:
+                print(f"[-] Error: Could not persist repositories.json after 5 attempts, but milestone artifact '{target_rel}' was generated.")
 
         # Mark in Failed Tasks Registry as resolved if previously logged
         try:
@@ -1585,7 +1687,10 @@ def execute_single_milestone_worker(target_repo: dict, target_milestone: dict, r
                 target_milestone["hermes_session_id"] = current_sess_id
             if failed_task_rec:
                 target_milestone["failure_task_id"] = failed_task_rec.get("task_id")
-            save_repositories(repos)
+            try:
+                save_repositories(repos)
+            except Exception as s_err:
+                print(f"[-] Warning: Failed to persist failed milestone state: {s_err}")
         trigger_failure_replanning(target_repo, target_milestone, err_msg, repos, repos_lock)
         return False
     finally:

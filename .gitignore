@@ -47,6 +47,8 @@ hermes_experience*
 # Local Runtime User Data & Dashboards (Keeps user repos and experience private)
 dashboards/*.json
 !dashboards/*.example.json
+dashboards/.*.lock
+dashboards/*.lock
 dashboards/notes_view/
 dashboards/HUMAN_ACTION_BOARD.md
 dashboards/ROADMAP_BOARD.md

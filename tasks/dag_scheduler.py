@@ -342,7 +342,7 @@ class DAGScheduler:
     # --------------------------------------------------------------------------
 
     def get_topological_tiers(self) -> List[List[MilestoneNode]]:
-        """
+        r"""
         Partitions milestones into level-synchronous concurrent execution tiers.
         
         Tier_0 = {v in V | in_degree(v) == 0}
