@@ -467,6 +467,157 @@ class DAGScheduler:
         return all_safe_batches
 
     # --------------------------------------------------------------------------
+    # Protocol Conformance Methods (TopologicalScheduler & Dynamic Operations)
+    # --------------------------------------------------------------------------
+
+    def insert_milestone(self, milestone_metadata: Dict[str, Any]) -> None:
+        """
+        Dynamically inserts a milestone into the DAG, updates edges,
+        and triggers validation.
+        """
+        m_id = str(milestone_metadata.get("id") or milestone_metadata.get("milestone_id") or "")
+        if not m_id:
+            raise ValueError("Milestone metadata must contain 'id' or 'milestone_id'")
+        name = str(milestone_metadata.get("name") or milestone_metadata.get("title") or m_id)
+        repo = str(
+            milestone_metadata.get("repo")
+            or milestone_metadata.get("repo_name")
+            or milestone_metadata.get("repo_id")
+            or "hermes_orchestrator"
+        )
+        target_file = milestone_metadata.get("target_file")
+        target_dir = milestone_metadata.get("target_dir")
+        prereqs = milestone_metadata.get("prerequisites") or milestone_metadata.get("deps") or []
+        status = milestone_metadata.get("status", "PENDING")
+        prio = int(milestone_metadata.get("priority_score", milestone_metadata.get("priority", 0)))
+        tokens = int(milestone_metadata.get("token_budget", milestone_metadata.get("estimated_tokens", 0)))
+
+        node = MilestoneNode(
+            id=m_id,
+            name=name,
+            repo=repo,
+            target_file=target_file,
+            target_dir=target_dir,
+            prerequisites=list(prereqs),
+            status=status,
+            metadata=dict(milestone_metadata),
+            priority=prio,
+            estimated_tokens=tokens,
+        )
+        self.add_node(node)
+        self.validate()
+
+    def remove_milestone(self, milestone_id: str) -> None:
+        """
+        Removes a milestone from the DAG and rebuilds dependency edges.
+        """
+        self.nodes.pop(milestone_id, None)
+        self._build_edges()
+        self._is_validated = False
+
+    def recompute_critical_path(self) -> List[str]:
+        """
+        Computes the critical path (longest path through DAG based on node cost/tokens).
+        Returns a list of milestone IDs forming the critical path.
+        """
+        if not self.nodes:
+            return []
+        if not self._is_validated:
+            try:
+                self.validate()
+            except CyclicDependencyException:
+                return []
+
+        try:
+            tiers = self.get_topological_tiers()
+        except CyclicDependencyException:
+            return list(self.nodes.keys())[:1]
+
+        dist: Dict[str, float] = {}
+        prev: Dict[str, Optional[str]] = {}
+        for u in self.nodes:
+            weight = max(1.0, float(self.nodes[u].estimated_tokens or self.nodes[u].priority or 1))
+            dist[u] = weight
+            prev[u] = None
+
+        for tier in tiers:
+            for node in tier:
+                u = node.id
+                for v in self.adj[u]:
+                    v_weight = max(1.0, float(self.nodes[v].estimated_tokens or self.nodes[v].priority or 1))
+                    if dist[u] + v_weight > dist[v]:
+                        dist[v] = dist[u] + v_weight
+                        prev[v] = u
+
+        if not dist:
+            return []
+        end_node = max(dist.keys(), key=lambda k: dist[k])
+        path = []
+        curr: Optional[str] = end_node
+        while curr is not None:
+            path.append(curr)
+            curr = prev.get(curr)
+        path.reverse()
+        return path
+
+    def is_ready(self, milestone_id: str) -> bool:
+        """
+        Determines whether the specified milestone is ready for dispatch.
+        A milestone is ready if it exists, is not in an aborted/blocked state,
+        and all of its resolved prerequisites have achieved COMPLETED status.
+        """
+        if milestone_id not in self.nodes:
+            return True
+        node = self.nodes[milestone_id]
+        if node.status in ("BLOCKED", "PREREQUISITE_ABORTED", "FAILED", "RUNNING"):
+            return False
+        if not self._is_validated:
+            try:
+                self.validate()
+            except Exception:
+                pass
+        prereqs = self._resolved_prereqs.get(milestone_id) or self.in_edges.get(milestone_id, set())
+        for pid in prereqs:
+            p_node = self.nodes.get(pid)
+            if not p_node or p_node.status != "COMPLETED":
+                return False
+        return True
+
+    def mark_descendants_prerequisite_aborted(
+        self, milestone_id: str, reason: str = "PREREQUISITE_ABORTED"
+    ) -> List[str]:
+        """
+        Recursively traverses downstream dependents of milestone_id and marks them
+        as PREREQUISITE_ABORTED.
+        """
+        if not self._is_validated:
+            try:
+                self.validate()
+            except Exception:
+                pass
+
+        aborted: List[str] = []
+        queue = collections.deque(list(self.adj.get(milestone_id, set())))
+        visited = set()
+
+        while queue:
+            curr = queue.popleft()
+            if curr in visited:
+                continue
+            visited.add(curr)
+            if curr in self.nodes:
+                node = self.nodes[curr]
+                node.status = "PREREQUISITE_ABORTED"
+                node.metadata["prerequisite_aborted_reason"] = reason
+                node.metadata["failed_upstream_milestone"] = milestone_id
+                aborted.append(curr)
+            for downstream in self.adj.get(curr, set()):
+                if downstream not in visited:
+                    queue.append(downstream)
+
+        return aborted
+
+    # --------------------------------------------------------------------------
     # Visualization & Serialization
     # --------------------------------------------------------------------------
 
