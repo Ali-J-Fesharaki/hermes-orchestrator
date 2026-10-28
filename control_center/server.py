@@ -1735,9 +1735,11 @@ def get_system_snapshot():
         }
     }
 
-def run_server():
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), ControlCenterHandler)
-    print(f"[*] Hermes Control Center & Agent Monitor running on http://127.0.0.1:{PORT}")
+HOST = os.environ.get("CONTROL_CENTER_HOST", "0.0.0.0")
+
+def run_server(host=HOST, port=PORT):
+    server = ThreadingHTTPServer((host, port), ControlCenterHandler)
+    print(f"[*] Hermes Control Center running on http://{host}:{port} (Accessible remotely or locally on http://127.0.0.1:{port})")
     server.serve_forever()
 
 if __name__ == "__main__":
