@@ -1009,6 +1009,19 @@
         </div>
       </div>
 
+      <!-- Visible Product Feature & Inspiration Box -->
+      <div id="editor-product-box" class="p-3.5 rounded-xl bg-teal-950/30 border border-teal-500/40 space-y-2 hidden">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-bold text-teal-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-wand-magic-sparkles text-teal-400"></i> What You Will See in the Product (ویژگی قابل مشاهده در محصول)
+          </label>
+          <span id="editor-inspiration-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950 text-purple-300 border border-purple-500/30">
+            Inspiration
+          </span>
+        </div>
+        <p id="editor-product-visual" class="text-xs text-teal-100 font-medium leading-relaxed bg-slate-900/80 p-2.5 rounded-lg border border-teal-500/20"></p>
+      </div>
+
       <!-- Milestone Editable Fields -->
       <div class="space-y-3 pt-1">
         <div>
@@ -2124,6 +2137,17 @@
               </div>
             </div>
             <p class="font-bold text-slate-100 text-xs leading-snug">${m.name}</p>
+            ${m.product_visual ? `
+              <div class="p-2 rounded-lg bg-teal-950/50 border border-teal-500/30 text-[11px] text-teal-200 flex items-start gap-1.5 leading-snug">
+                <i class="fa-solid fa-wand-magic-sparkles text-teal-400 mt-0.5 flex-shrink-0 text-[10px]"></i>
+                <span class="line-clamp-2" title="${m.product_visual}"><b>Feature:</b> ${m.product_visual}</span>
+              </div>
+            ` : ''}
+            ${m.inspiration ? `
+              <div class="flex items-center gap-1 text-[10px] text-purple-300 font-mono">
+                <i class="fa-solid fa-lightbulb text-purple-400 text-[9px]"></i> <span class="truncate">Inspired by: <b>${m.inspiration}</b></span>
+              </div>
+            ` : ''}
             <p class="text-slate-400 text-[11px] leading-relaxed line-clamp-2">${m.details || 'No detailed specifications.'}</p>
             <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-700/40 text-[10px] text-slate-400 font-mono">
               <span class="truncate max-w-[180px] text-slate-400" title="${m.relative_filepath || ''}">
@@ -3195,6 +3219,25 @@
       else if (st === 'backlog' || ghCol === 'backlog') editorVal = 'backlog';
       else editorVal = 'pending';
       document.getElementById('editor-status').value = editorVal;
+
+      // Product Visual & Inspiration rendering
+      const prodBox = document.getElementById('editor-product-box');
+      const prodVisual = document.getElementById('editor-product-visual');
+      const inspBadge = document.getElementById('editor-inspiration-badge');
+      if (prodBox && prodVisual && inspBadge) {
+        if (m.product_visual || m.inspiration) {
+          prodBox.classList.remove('hidden');
+          prodVisual.innerText = m.product_visual || m.details || 'Tangible feature delivered into the product.';
+          if (m.inspiration) {
+            inspBadge.classList.remove('hidden');
+            inspBadge.innerHTML = `<i class="fa-solid fa-lightbulb text-purple-400 mr-1"></i> Inspired by: <b>${m.inspiration}</b>`;
+          } else {
+            inspBadge.classList.add('hidden');
+          }
+        } else {
+          prodBox.classList.add('hidden');
+        }
+      }
 
       // Git Provenance & Research Artifacts rendering
       const provBox = document.getElementById('editor-provenance-box');

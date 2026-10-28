@@ -189,7 +189,9 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_roadmap(self):
-        roadmap_path = BASE_DIR / "FUTURE_ROADMAP.md"
+        roadmap_path = BASE_DIR / "ROADMAP.md"
+        if not roadmap_path.exists():
+            roadmap_path = BASE_DIR / "FUTURE_ROADMAP.md"
         content = ""
         if roadmap_path.exists():
             content = roadmap_path.read_text(encoding="utf-8")
@@ -197,7 +199,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(json.dumps({"content": content, "path": "FUTURE_ROADMAP.md"}).encode("utf-8"))
+        self.wfile.write(json.dumps({"content": content, "path": roadmap_path.name}).encode("utf-8"))
 
     def handle_fleet_health(self):
         try:

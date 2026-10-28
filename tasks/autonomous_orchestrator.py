@@ -65,6 +65,11 @@ try:
 except ImportError:
     from tasks.cadence_manager import get_cadence_manager
 
+try:
+    from roadmap_horizon_expander import is_roadmap_exhausted, expand_repository_horizon
+except ImportError:
+    from tasks.roadmap_horizon_expander import is_roadmap_exhausted, expand_repository_horizon
+
 # Arize Phoenix Tracing
 try:
     from phoenix_tracer import init_phoenix_tracing, record_llm_span, record_error_span
@@ -807,6 +812,16 @@ def run_planner_pass(repos: list) -> bool:
             try:
                 git_state = get_repo_git_state(repo_path)
                 goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
+
+                # Proactive Horizon Expansion: If existing roadmap goals are completed or exhausted,
+                # ground future evolution in cutting-edge open source repos / papers and update ROADMAP.md!
+                try:
+                    if is_roadmap_exhausted(goal_doc, milestones):
+                        new_horizon = expand_repository_horizon(repo_path, repo_id, repo_name)
+                        if new_horizon:
+                            goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
+                except Exception as he:
+                    print(f"[-] Horizon expansion notice for '{repo_name}': {he}")
                     
                 existing_pipeline_block = ""
                 if pending:
@@ -820,18 +835,21 @@ def run_planner_pass(repos: list) -> bool:
                     )
 
                 system_prompt = (
-                    "You are the Principal Strategic Research & Engineering Planner (Claude Opus 4.6 Thinking).\n"
-                    "Your role is STRICTLY high-level architectural planning, goal prioritization, and milestone dispatching.\n"
-                    "Base decisions SOLELY on the provided Repository Overview, Goal Dashboard, and existing active pipeline.\n"
-                    f"The repository pipeline maintains a continuous active buffer of {target_cap} tasks.\n"
-                    f"Formulate exactly {missing} concrete subsequent milestone(s) to refill the pipeline.\n"
-                    "Return ONLY a clean JSON array of milestone objects, each with:\n"
-                    "  'name': concise title,\n"
+                    "You are the Chief Product & Engineering Architect (Claude Opus 4.6 / Gemini Thinking).\n"
+                    "Your role is formulating CONCISE, TANGIBLE, APPLICATION-CENTRIC MILESTONES that excite the human architect.\n"
+                    "CRITICAL DIRECTIVES:\n"
+                    "1. NO LONG-WINDED ACADEMIC WORD SALAD (e.g. no 'Autonomic Socratic Blast-Radius Emulators').\n"
+                    "2. APPLICATION-CENTRIC: Every milestone must define a clear, tangible product feature (a visible UI button, interactive modal, PDF export, or concrete feeder module).\n"
+                    "3. INSPIRATION: Ground each milestone in cutting-edge open-source GitHub projects or tools (e.g. Cursor, v0, Reactive Resume, Linear, Connected Papers).\n"
+                    f"Synthesize exactly {missing} milestone(s) to refill the pipeline buffer.\n"
+                    "Return ONLY a clean JSON array of milestone objects, each with strictly:\n"
+                    "  'name': Short, punchy feature title (5-8 words max, plain language),\n"
                     "  'status': 'pending',\n"
-                    "  'details': detailed technical / mathematical description,\n"
-                    "  'relative_filepath': target source/LaTeX file relative to repository root,\n"
-                    "  'technical_specification': rigorous algorithmic formulation,\n"
-                    "  'executor_prompt': detailed authoritative prompt for Gemini 3.8 to implement the artifact."
+                    "  'product_visual': Exactly 1 plain sentence: What will the human actually see or experience in the product/UI/PDF?\n"
+                    "  'inspiration': State-of-the-art open-source project or tool inspiring this (e.g. 'Reactive Resume / Teal ATS Engine'),\n"
+                    "  'details': 1-2 simple, direct sentences explaining what the code does (in plain English/Persian),\n"
+                    "  'relative_filepath': Target implementation file where this visible capability or its direct feeder module lives,\n"
+                    "  'executor_prompt': Authoritative implementation prompt for Gemini 3.8 to build the working, non-mock deliverable."
                 )
                 user_intent = repo.get("user_steering_intent", "").strip()
                 intent_block = ""
@@ -938,16 +956,21 @@ def synthesize_steered_milestones(repo_id: str, steering_intent: str, limit: int
         goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, target_repo)
 
         system_prompt = (
-            "You are the Principal Strategic Research & Engineering Planner (Claude Opus 4.6 Thinking).\n"
-            "Your role is STRICTLY high-level architectural planning and milestone dispatching.\n"
+            "You are the Chief Product & Engineering Architect (Claude Opus 4.6 / Gemini Thinking).\n"
+            "Your role is formulating CONCISE, TANGIBLE, APPLICATION-CENTRIC MILESTONES that excite the human architect.\n"
+            "CRITICAL DIRECTIVES:\n"
+            "1. NO LONG-WINDED ACADEMIC WORD SALAD (e.g. no 'Autonomic Socratic Blast-Radius Emulators').\n"
+            "2. APPLICATION-CENTRIC: Every milestone must define a clear, tangible product feature (a visible UI button, interactive modal, PDF export, or concrete feeder module).\n"
+            "3. INSPIRATION: Ground each milestone in cutting-edge open-source GitHub projects or tools (e.g. Cursor, v0, Reactive Resume, Linear, Connected Papers).\n"
             f"The human architect has provided a specific steering direction. Synthesize exactly up to {limit} concrete milestones.\n"
-            "Return ONLY a clean JSON array of milestone objects, each with:\n"
-            "  'name': concise title,\n"
+            "Return ONLY a clean JSON array of milestone objects, each with strictly:\n"
+            "  'name': Short, punchy feature title (5-8 words max, plain language),\n"
             "  'status': 'pending',\n"
-            "  'details': detailed technical / mathematical description,\n"
-            "  'relative_filepath': target source/LaTeX file relative to repository root,\n"
-            "  'technical_specification': rigorous algorithmic formulation,\n"
-            "  'executor_prompt': detailed authoritative prompt for Gemini 3.8 to implement the artifact."
+            "  'product_visual': Exactly 1 plain sentence: What will the human actually see or experience in the product/UI/PDF?\n"
+            "  'inspiration': State-of-the-art open-source project or tool inspiring this (e.g. 'Reactive Resume / Teal ATS Engine'),\n"
+            "  'details': 1-2 simple, direct sentences explaining what the code does (in plain English/Persian),\n"
+            "  'relative_filepath': Target implementation file where this visible capability or its direct feeder module lives,\n"
+            "  'executor_prompt': Authoritative implementation prompt for Gemini 3.8 to build the working, non-mock deliverable."
         )
         historical_steering = ""
         try:
