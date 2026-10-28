@@ -66,9 +66,9 @@ except ImportError:
     from tasks.cadence_manager import get_cadence_manager
 
 try:
-    from roadmap_horizon_expander import is_roadmap_exhausted, expand_repository_horizon
+    from roadmap_horizon_expander import is_roadmap_exhausted, propose_repository_horizon, get_pending_horizon_proposal
 except ImportError:
-    from tasks.roadmap_horizon_expander import is_roadmap_exhausted, expand_repository_horizon
+    from tasks.roadmap_horizon_expander import is_roadmap_exhausted, propose_repository_horizon, get_pending_horizon_proposal
 
 # Arize Phoenix Tracing
 try:
@@ -813,15 +813,19 @@ def run_planner_pass(repos: list) -> bool:
                 git_state = get_repo_git_state(repo_path)
                 goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
 
-                # Proactive Horizon Expansion: If existing roadmap goals are completed or exhausted,
-                # ground future evolution in cutting-edge open source repos / papers and update ROADMAP.md!
+                # Proactive Horizon Expansion & Human Approval Gate:
+                # If existing roadmap goals are completed or exhausted, formulate an AI Horizon Proposal.
+                # STRICT DIRECTIVE: NEVER plan or execute self-created phases without explicit human approval!
                 try:
                     if is_roadmap_exhausted(goal_doc, milestones):
-                        new_horizon = expand_repository_horizon(repo_path, repo_id, repo_name)
-                        if new_horizon:
-                            goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
+                        pending_prop = get_pending_horizon_proposal(repo_id)
+                        if not pending_prop:
+                            pending_prop = propose_repository_horizon(repo_path, repo_id, repo_name)
+                        if pending_prop and pending_prop.get("status") == "AWAITING_HUMAN_APPROVAL":
+                            print(f"[!] ⏳ [HORIZON APPROVAL GATE] '{repo_name}' has proposed Phase {pending_prop['phase_number']}: '{pending_prop['feature_title']}' (Inspiration: {pending_prop['inspiration']}). Awaiting human approval before formulating milestones.")
+                            return False
                 except Exception as he:
-                    print(f"[-] Horizon expansion notice for '{repo_name}': {he}")
+                    print(f"[-] Horizon expansion gate notice for '{repo_name}': {he}")
                     
                 existing_pipeline_block = ""
                 if pending:
@@ -847,7 +851,7 @@ def run_planner_pass(repos: list) -> bool:
                     "  'status': 'pending',\n"
                     "  'product_visual': Exactly 1 plain sentence: What will the human actually see or experience in the product/UI/PDF?\n"
                     "  'inspiration': State-of-the-art open-source project or tool inspiring this (e.g. 'Reactive Resume / Teal ATS Engine'),\n"
-                    "  'details': 1-2 simple, direct sentences explaining what the code does (in plain English/Persian),\n"
+                    "  'details': 1-2 simple, direct sentences explaining what the code does (strictly in concise English),\n"
                     "  'relative_filepath': Target implementation file where this visible capability or its direct feeder module lives,\n"
                     "  'executor_prompt': Authoritative implementation prompt for Gemini 3.8 to build the working, non-mock deliverable."
                 )
@@ -968,7 +972,7 @@ def synthesize_steered_milestones(repo_id: str, steering_intent: str, limit: int
             "  'status': 'pending',\n"
             "  'product_visual': Exactly 1 plain sentence: What will the human actually see or experience in the product/UI/PDF?\n"
             "  'inspiration': State-of-the-art open-source project or tool inspiring this (e.g. 'Reactive Resume / Teal ATS Engine'),\n"
-            "  'details': 1-2 simple, direct sentences explaining what the code does (in plain English/Persian),\n"
+            "  'details': 1-2 simple, direct sentences explaining what the code does (strictly in concise English),\n"
             "  'relative_filepath': Target implementation file where this visible capability or its direct feeder module lives,\n"
             "  'executor_prompt': Authoritative implementation prompt for Gemini 3.8 to build the working, non-mock deliverable."
         )

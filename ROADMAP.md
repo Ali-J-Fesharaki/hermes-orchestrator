@@ -95,3 +95,13 @@ When formulating new milestones for `hermes_orchestrator`:
 2. Maintain strict separation of concerns: modular files, thread-safety, non-destructive file operations.
 3. Every milestone must generate publication-grade, self-tested code with zero dummy placeholders.
 4. Enforce clear architectural documentation within every deliverable file.
+
+
+---
+
+## 🌟 Phase 1: Live Subprocess Output Drawer & Step-by-Step Tool Trace (Approved)
+* **Approved by Human Architect:** 2026-10-28 12:41
+* **Inspiration:** `Hermes Subprocess Streaming & Live Tool Logs`
+* **What You Will See in the Product:**
+  - A slide-out drawer in the Cockpit streaming live terminal output, tool calls, and syntax checks from active Hermes worker subprocesses.
+* **Target Delivery File:** `control_center/index.html`

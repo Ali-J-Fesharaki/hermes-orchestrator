@@ -114,8 +114,25 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_repository_evolution(parsed)
         elif parsed.path == "/api/cadence":
             self.handle_get_cadence()
+        elif parsed.path == "/api/horizon/pending":
+            self.handle_get_horizon_proposals()
         else:
             super().do_GET()
+
+    def handle_get_horizon_proposals(self):
+        try:
+            try:
+                from tasks.roadmap_horizon_expander import load_proposals
+            except ImportError:
+                from roadmap_horizon_expander import load_proposals  # type: ignore
+            data = load_proposals()
+        except Exception as e:
+            data = {"error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_get_cadence(self):
         try:
@@ -329,8 +346,46 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_repository_evolution_steer(payload)
         elif parsed.path == "/api/cadence/tune":
             self.handle_cadence_tune(payload)
+        elif parsed.path == "/api/horizon/approve":
+            self.handle_approve_horizon(payload)
+        elif parsed.path == "/api/horizon/reject":
+            self.handle_reject_horizon(payload)
         else:
             self.send_error(404, "Endpoint not found")
+
+    def handle_approve_horizon(self, payload):
+        repo_id = payload.get("repo_id", "")
+        try:
+            try:
+                from tasks.roadmap_horizon_expander import approve_repository_horizon
+            except ImportError:
+                from roadmap_horizon_expander import approve_repository_horizon  # type: ignore
+            ok = approve_repository_horizon(repo_id)
+            res = {"status": "ok" if ok else "error", "approved": ok}
+        except Exception as e:
+            res = {"status": "error", "error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+
+    def handle_reject_horizon(self, payload):
+        repo_id = payload.get("repo_id", "")
+        try:
+            try:
+                from tasks.roadmap_horizon_expander import reject_repository_horizon
+            except ImportError:
+                from roadmap_horizon_expander import reject_repository_horizon  # type: ignore
+            ok = reject_repository_horizon(repo_id)
+            res = {"status": "ok" if ok else "error", "rejected": ok}
+        except Exception as e:
+            res = {"status": "error", "error": str(e)}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
 
     def handle_cadence_tune(self, payload):
         repo_id = payload.get("repo_id", "")

@@ -113,6 +113,26 @@
     <!-- TAB 1: MULTI-REPO KANBAN BOARD                                    -->
     <!-- ================================================================= -->
     <div id="tab-kanban" class="space-y-4">
+      <!-- AI Horizon Expansion Proposal Banner (Human Approval Gate) -->
+      <div id="horizon-proposal-banner" class="hidden p-3.5 rounded-xl border border-amber-500/50 bg-gradient-to-r from-amber-950/40 via-slate-900 to-indigo-950/40 space-y-2 shadow-lg">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <span class="text-xs font-bold text-amber-300">AI Self-Evolution Horizon Proposal Awaiting Authorization:</span>
+            <span id="horizon-repo-tag" class="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40"></span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="approveActiveHorizon()" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 shadow transition">
+              <i class="fa-solid fa-check"></i> Authorize Roadmap Phase
+            </button>
+            <button onclick="rejectActiveHorizon()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs transition">
+              <i class="fa-solid fa-times"></i> Dismiss
+            </button>
+          </div>
+        </div>
+        <p id="horizon-details-text" class="text-xs text-slate-200 leading-relaxed font-medium"></p>
+      </div>
+
       <!-- Repo Filter & Controls -->
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center gap-3">
@@ -1013,7 +1033,7 @@
       <div id="editor-product-box" class="p-3.5 rounded-xl bg-teal-950/30 border border-teal-500/40 space-y-2 hidden">
         <div class="flex items-center justify-between">
           <label class="text-xs font-bold text-teal-300 flex items-center gap-1.5">
-            <i class="fa-solid fa-wand-magic-sparkles text-teal-400"></i> What You Will See in the Product (ویژگی قابل مشاهده در محصول)
+            <i class="fa-solid fa-wand-magic-sparkles text-teal-400"></i> What You Will See in the Product
           </label>
           <span id="editor-inspiration-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950 text-purple-300 border border-purple-500/30">
             Inspiration
@@ -1596,8 +1616,68 @@
         renderTelemetry();
         renderLinkedIn();
         renderBugfixQueue();
+        checkHorizonProposals();
       } catch (e) {
         console.error("Fetch error:", e);
+      }
+    }
+
+    let activePendingHorizon = null;
+    async function checkHorizonProposals() {
+      try {
+        const resp = await fetch('/api/horizon/pending');
+        const proposals = await resp.json();
+        const banner = document.getElementById('horizon-proposal-banner');
+        const tag = document.getElementById('horizon-repo-tag');
+        const text = document.getElementById('horizon-details-text');
+        if (!banner || !tag || !text) return;
+
+        const pendingList = Object.values(proposals).filter(p => p.status === 'AWAITING_HUMAN_APPROVAL');
+        if (pendingList.length > 0) {
+          activePendingHorizon = pendingList[0];
+          banner.classList.remove('hidden');
+          tag.innerText = `[${activePendingHorizon.repo_name}] Phase ${activePendingHorizon.phase_number}`;
+          text.innerHTML = `<b>Feature:</b> ${activePendingHorizon.feature_title} &bull; <b>Grounded via:</b> <span class="text-purple-300 font-mono">${activePendingHorizon.inspiration}</span><br><span class="text-[11px] text-teal-300"><b>What You Will See:</b> ${activePendingHorizon.product_visual}</span>`;
+        } else {
+          activePendingHorizon = null;
+          banner.classList.add('hidden');
+        }
+      } catch (e) {
+        console.error('Error checking horizon proposals:', e);
+      }
+    }
+
+    async function approveActiveHorizon() {
+      if (!activePendingHorizon) return;
+      try {
+        const resp = await fetch('/api/horizon/approve', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({repo_id: activePendingHorizon.repo_id})
+        });
+        const res = await resp.json();
+        if (res.status === 'ok') {
+          showToast(`✅ Approved Phase ${activePendingHorizon.phase_number} for ${activePendingHorizon.repo_name}!`);
+          await checkHorizonProposals();
+          await fetchStatus();
+        }
+      } catch (e) {
+        alert('Failed to approve horizon: ' + e.message);
+      }
+    }
+
+    async function rejectActiveHorizon() {
+      if (!activePendingHorizon) return;
+      try {
+        await fetch('/api/horizon/reject', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({repo_id: activePendingHorizon.repo_id})
+        });
+        showToast('❌ Horizon proposal dismissed.');
+        await checkHorizonProposals();
+      } catch (e) {
+        alert('Failed to dismiss: ' + e.message);
       }
     }
 
