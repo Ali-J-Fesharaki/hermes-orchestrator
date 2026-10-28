@@ -43,8 +43,8 @@ class MilestoneNode:
     Represents an atomic milestone node within the multi-repo execution DAG.
     """
     id: str
-    name: str
-    repo: str
+    name: str = ""
+    repo: str = "hermes_orchestrator"
     target_file: Optional[str] = None
     target_dir: Optional[str] = None
     prerequisites: List[str] = field(default_factory=list)
@@ -52,8 +52,20 @@ class MilestoneNode:
     metadata: Dict[str, Any] = field(default_factory=dict)
     priority: int = 0
     estimated_tokens: int = 0
+    title: Optional[str] = None
+    repo_id: Optional[str] = None
+    repo_name: Optional[str] = None
+    tier: int = 0
 
     def __post_init__(self):
+        if not self.name and self.title:
+            self.name = self.title
+        elif not self.title and self.name:
+            self.title = self.name
+        if self.repo_id and not self.repo:
+            self.repo = self.repo_id
+        if self.repo_name and not self.repo:
+            self.repo = self.repo_name
         self.id = str(self.id).strip()
         self.name = str(self.name).strip()
         self.repo = str(self.repo).strip()

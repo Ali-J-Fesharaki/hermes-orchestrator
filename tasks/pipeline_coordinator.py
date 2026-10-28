@@ -9,6 +9,7 @@ and provenance recording with automatic LIFO compensating transactions.
 
 from __future__ import annotations
 
+import collections
 import heapq
 import logging
 import threading
@@ -30,6 +31,134 @@ from typing import (
     Union,
     runtime_checkable,
 )
+
+# ============================================================================
+# Topological Dependency DAG Import & Protocol Conformance Bridge
+# ============================================================================
+
+try:
+    from tasks.dag_scheduler import (
+        CyclicDependencyException,
+        DAGScheduler,
+        MilestoneNode,
+        UnresolvedDependencyException,
+    )
+except ImportError:
+    try:
+        from dag_scheduler import (  # type: ignore[no-redef]
+            CyclicDependencyException,
+            DAGScheduler,
+            MilestoneNode,
+            UnresolvedDependencyException,
+        )
+    except ImportError:
+        # Fallback minimal definitions if dag_scheduler module is unavailable
+        class CyclicDependencyException(Exception):  # type: ignore[no-redef]
+            def __init__(self, cycle_path: List[str], message: Optional[str] = None):
+                self.cycle_path = cycle_path
+                super().__init__(message or f"Cycle detected: {' -> '.join(cycle_path)}")
+
+        class UnresolvedDependencyException(Exception):  # type: ignore[no-redef]
+            pass
+
+        @dataclass
+        class MilestoneNode:  # type: ignore[no-redef]
+            id: str
+            name: str
+            repo: str
+            target_file: Optional[str] = None
+            target_dir: Optional[str] = None
+            prerequisites: List[str] = field(default_factory=list)
+            status: str = "PENDING"
+            metadata: Dict[str, Any] = field(default_factory=dict)
+            priority: int = 0
+            estimated_tokens: int = 0
+
+            def to_dict(self) -> Dict[str, Any]:
+                return {
+                    "id": self.id,
+                    "name": self.name,
+                    "repo": self.repo,
+                    "target_file": self.target_file,
+                    "target_dir": self.target_dir,
+                    "prerequisites": self.prerequisites,
+                    "status": self.status,
+                    "metadata": self.metadata,
+                }
+
+        class DAGScheduler:  # type: ignore[no-redef]
+            def __init__(self, allow_missing_prereqs: bool = True) -> None:
+                self.allow_missing_prereqs = allow_missing_prereqs
+                self.nodes: Dict[str, MilestoneNode] = {}
+                self.adj: Dict[str, set] = collections.defaultdict(set)
+                self.in_edges: Dict[str, set] = collections.defaultdict(set)
+
+            def insert_milestone(self, metadata: Dict[str, Any]) -> None:
+                m_id = str(metadata.get("id") or metadata.get("milestone_id") or "")
+                node = MilestoneNode(
+                    id=m_id,
+                    name=str(metadata.get("name") or metadata.get("title") or m_id),
+                    repo=str(metadata.get("repo", "default")),
+                    target_file=metadata.get("target_file"),
+                    target_dir=metadata.get("target_dir"),
+                    prerequisites=list(metadata.get("prerequisites", [])),
+                    status=metadata.get("status", "PENDING"),
+                    metadata=dict(metadata),
+                )
+                self.nodes[m_id] = node
+
+            def remove_milestone(self, milestone_id: str) -> None:
+                self.nodes.pop(milestone_id, None)
+
+            def recompute_critical_path(self) -> Any:
+                return list(self.nodes.keys())
+
+            def is_ready(self, milestone_id: str) -> bool:
+                return True
+
+            def mark_descendants_prerequisite_aborted(
+                self, milestone_id: str, reason: str = "PREREQUISITE_ABORTED"
+            ) -> List[str]:
+                return []
+
+
+# Ensure DAGScheduler dynamically satisfies TopologicalScheduler protocol if needed
+if hasattr(DAGScheduler, "add_node") and not hasattr(DAGScheduler, "insert_milestone"):
+    def _dag_insert_milestone(self: Any, milestone_metadata: Dict[str, Any]) -> None:
+        m_id = str(milestone_metadata.get("id") or milestone_metadata.get("milestone_id") or "")
+        node = MilestoneNode(
+            id=m_id,
+            name=str(milestone_metadata.get("name") or milestone_metadata.get("title") or m_id),
+            repo=str(milestone_metadata.get("repo", "hermes_orchestrator")),
+            target_file=milestone_metadata.get("target_file"),
+            target_dir=milestone_metadata.get("target_dir"),
+            prerequisites=list(milestone_metadata.get("prerequisites", [])),
+            status=milestone_metadata.get("status", "PENDING"),
+            metadata=dict(milestone_metadata),
+        )
+        self.add_node(node)
+        if hasattr(self, "validate"):
+            self.validate()
+
+    setattr(DAGScheduler, "insert_milestone", _dag_insert_milestone)
+
+if hasattr(DAGScheduler, "nodes") and not hasattr(DAGScheduler, "remove_milestone"):
+    def _dag_remove_milestone(self: Any, milestone_id: str) -> None:
+        self.nodes.pop(milestone_id, None)
+        if hasattr(self, "_build_edges"):
+            self._build_edges()
+
+    setattr(DAGScheduler, "remove_milestone", _dag_remove_milestone)
+
+if not hasattr(DAGScheduler, "recompute_critical_path"):
+    setattr(DAGScheduler, "recompute_critical_path", lambda self: list(self.nodes.keys()))
+
+if not hasattr(DAGScheduler, "is_ready"):
+    setattr(DAGScheduler, "is_ready", lambda self, m_id: True)
+
+if not hasattr(DAGScheduler, "mark_descendants_prerequisite_aborted"):
+    setattr(DAGScheduler, "mark_descendants_prerequisite_aborted", lambda self, m_id, reason="PREREQUISITE_ABORTED": [])
+
 
 # ============================================================================
 # OpenTelemetry Graceful Fallback / Instrumentation Layer
@@ -396,7 +525,6 @@ class HoldingQueue:
 
         with self._lock.write_locked():
             self._counter += 1
-            # heapq is min-heap: store -priority_score for max-heap behavior
             entry = (-priority_score, self._counter, retry_after, milestone_id, metadata or {})
             heapq.heappush(self._heap, entry)
             logger.info(
@@ -425,7 +553,6 @@ class HoldingQueue:
                 else:
                     remaining_heap.append((neg_priority, cnt, retry_after, m_id, meta))
 
-            # Restore remaining unready elements back into heap
             heapq.heapify(remaining_heap)
             self._heap = remaining_heap
 
@@ -491,7 +618,7 @@ class PipelineTransaction:
         if exc_type is not None or not self._committed:
             error_reason = str(exc_val) if exc_val else "Transaction uncommitted or aborted"
             self._execute_compensators(reason=error_reason)
-        return False  # Propagate exception to caller if present
+        return False
 
     def _execute_compensators(self, reason: str = "") -> None:
         """Executes all registered compensators in LIFO order."""
@@ -571,27 +698,29 @@ class PipelineCoordinator:
 
     def __init__(
         self,
-        cost_estimator: MilestoneCostEstimator,
-        feasibility_gate: FeasibilityGate,
-        decomposer: MilestoneDecomposer,
-        dag_scheduler: TopologicalScheduler,
-        governor: ExecutionGovernor,
-        steering_memory: MemoryStore,
-        provenance: ProvenanceLedger,
-        lifecycle: LifecycleStateMachine,
-        rollback: RollbackOrchestrator,
-        quota_engine: QuotaArbitrageEngine,
+        cost_estimator: Optional[MilestoneCostEstimator] = None,
+        feasibility_gate: Optional[FeasibilityGate] = None,
+        decomposer: Optional[MilestoneDecomposer] = None,
+        dag_scheduler: Optional[TopologicalScheduler] = None,
+        governor: Optional[ExecutionGovernor] = None,
+        steering_memory: Optional[MemoryStore] = None,
+        provenance: Optional[ProvenanceLedger] = None,
+        lifecycle: Optional[LifecycleStateMachine] = None,
+        rollback: Optional[RollbackOrchestrator] = None,
+        quota_engine: Optional[QuotaArbitrageEngine] = None,
     ) -> None:
-        self.cost_estimator = cost_estimator
-        self.feasibility_gate = feasibility_gate
-        self.decomposer = decomposer
-        self.dag_scheduler = dag_scheduler
-        self.governor = governor
-        self.steering_memory = steering_memory
-        self.provenance = provenance
-        self.lifecycle = lifecycle
-        self.rollback = rollback
-        self.quota_engine = quota_engine
+        self.cost_estimator = cost_estimator or MockMilestoneCostEstimator()
+        self.feasibility_gate = feasibility_gate or MockFeasibilityGate()
+        self.decomposer = decomposer or MockMilestoneDecomposer()
+        self.dag_scheduler = (
+            dag_scheduler if dag_scheduler is not None else DAGScheduler(allow_missing_prereqs=True)
+        )
+        self.governor = governor or MockExecutionGovernor()
+        self.steering_memory = steering_memory or MockMemoryStore()
+        self.provenance = provenance or MockProvenanceLedger()
+        self.lifecycle = lifecycle or MockLifecycleStateMachine()
+        self.rollback = rollback or MockRollbackOrchestrator()
+        self.quota_engine = quota_engine or MockQuotaArbitrageEngine()
 
         self.holding_queue = HoldingQueue()
         self._states_lock = ReadWriteLock()
@@ -599,6 +728,9 @@ class PipelineCoordinator:
 
         self._milestone_locks_guard = threading.Lock()
         self._milestone_locks: Dict[str, threading.RLock] = {}
+
+        self._running_lock = threading.Lock()
+        self._running_milestones: Dict[str, Dict[str, Any]] = {}
 
     def _get_milestone_lock(self, milestone_id: str) -> threading.RLock:
         """Retrieve or create a reentrant lock keyed per milestone_id."""
@@ -636,6 +768,222 @@ class PipelineCoordinator:
                 entered_at=state.entered_at,
                 stage_metadata=dict(state.stage_metadata),
             )
+
+    # ------------------------------------------------------------------------
+    # Dynamic Milestone Ingestion & Dependency Management
+    # ------------------------------------------------------------------------
+
+    def insert_milestone(self, milestone_metadata: Dict[str, Any]) -> bool:
+        """
+        Dynamically ingests a milestone into the pipeline and synchronizes state
+        with the underlying DAG scheduler.
+
+        Defensively catches CyclicDependencyException, logs an architectural warning,
+        and isolates the cyclic node into BLOCKED status without crashing the coordinator daemon.
+        """
+        milestone_id = str(milestone_metadata.get("id") or milestone_metadata.get("milestone_id") or "")
+        if not milestone_id:
+            raise ValueError("Milestone metadata must contain 'id' or 'milestone_id'")
+
+        try:
+            self.dag_scheduler.insert_milestone(milestone_metadata)
+            if hasattr(self.dag_scheduler, "recompute_critical_path"):
+                self.dag_scheduler.recompute_critical_path()
+            self._set_stage(milestone_id, PipelineStage.DAG_INSERT, {"status": "REGISTERED_IN_DAG"})
+            return True
+        except CyclicDependencyException as cyc_err:
+            logger.warning(
+                "Cyclic dependency detected during dynamic insertion of milestone %s: %s. Isolating node to BLOCKED.",
+                milestone_id,
+                str(cyc_err),
+                extra={"milestone_id": milestone_id, "cycle_path": getattr(cyc_err, "cycle_path", [])},
+            )
+            self._set_stage(milestone_id, PipelineStage.DAG_INSERT, {
+                "status": "BLOCKED",
+                "error": str(cyc_err),
+                "cycle_path": getattr(cyc_err, "cycle_path", []),
+            })
+            try:
+                self.lifecycle.transition(milestone_id, "BLOCKED", {"reason": str(cyc_err)})
+            except Exception:
+                pass
+            return False
+
+    def remove_milestone(self, milestone_id: str) -> None:
+        """
+        Removes a milestone from the pipeline and underlying DAG scheduler.
+        """
+        self.dag_scheduler.remove_milestone(milestone_id)
+        if hasattr(self.dag_scheduler, "recompute_critical_path"):
+            self.dag_scheduler.recompute_critical_path()
+        with self._states_lock.write_locked():
+            self._pipeline_states.pop(milestone_id, None)
+        with self._running_lock:
+            self._running_milestones.pop(milestone_id, None)
+
+    # ------------------------------------------------------------------------
+    # Topological Readiness Checking & Concurrency Safety
+    # ------------------------------------------------------------------------
+
+    def check_mutex_conflict(self, candidate: Dict[str, Any]) -> Optional[str]:
+        """
+        Evaluates concurrency conflicts between candidate and all actively running milestones.
+        Returns the conflicting running milestone_id, or None if conflict-free.
+        """
+        with self._running_lock:
+            for running_id, running_meta in self._running_milestones.items():
+                if hasattr(self.dag_scheduler, "evaluate_conflict"):
+                    try:
+                        node_cand = (
+                            MilestoneNode(
+                                id=str(candidate.get("id") or candidate.get("milestone_id") or ""),
+                                name=str(candidate.get("name") or candidate.get("title") or ""),
+                                repo=str(candidate.get("repo") or candidate.get("repo_name") or "default"),
+                                target_file=candidate.get("target_file"),
+                                target_dir=candidate.get("target_dir"),
+                            )
+                            if "MilestoneNode" in globals()
+                            else candidate
+                        )
+                        node_run = (
+                            MilestoneNode(
+                                id=str(running_meta.get("id") or running_meta.get("milestone_id") or ""),
+                                name=str(running_meta.get("name") or running_meta.get("title") or ""),
+                                repo=str(running_meta.get("repo") or running_meta.get("repo_name") or "default"),
+                                target_file=running_meta.get("target_file"),
+                                target_dir=running_meta.get("target_dir"),
+                            )
+                            if "MilestoneNode" in globals()
+                            else running_meta
+                        )
+                        if self.dag_scheduler.evaluate_conflict(node_cand, node_run):
+                            return running_id
+                    except Exception:
+                        pass
+
+                # Fallback mutex predicate
+                cand_repo = candidate.get("repo") or candidate.get("repo_name")
+                run_repo = running_meta.get("repo") or running_meta.get("repo_name")
+                if cand_repo and run_repo and cand_repo == run_repo:
+                    cand_file = candidate.get("target_file")
+                    run_file = running_meta.get("target_file")
+                    if cand_file and run_file and cand_file == run_file:
+                        return running_id
+                    cand_dir = candidate.get("target_dir")
+                    run_dir = running_meta.get("target_dir")
+                    if cand_dir and run_dir and cand_dir == run_dir and cand_dir not in (".", ""):
+                        return running_id
+        return None
+
+    def dispatch_next_runnable(
+        self, candidate_milestones: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Topological Readiness & Concurrency Safety Filter:
+        Inspects candidate milestones (or registered DAG nodes), checks topological readiness
+        via dag_scheduler.is_ready(milestone_id), verifies no mutex conflicts against currently
+        running milestones, advances to RUNNING, and issues leases.
+        """
+        candidates = candidate_milestones or []
+        if not candidates and hasattr(self.dag_scheduler, "nodes"):
+            candidates = [
+                n.to_dict() if hasattr(n, "to_dict") else dict(n)
+                for n in self.dag_scheduler.nodes.values()
+            ]
+
+        dispatched: List[Dict[str, Any]] = []
+        for milestone_meta in candidates:
+            m_id = str(milestone_meta.get("id") or milestone_meta.get("milestone_id") or "")
+            if not m_id:
+                continue
+
+            with self._running_lock:
+                if m_id in self._running_milestones:
+                    continue
+
+            # 1. Topological Readiness Check
+            if not self.dag_scheduler.is_ready(m_id):
+                logger.info("Milestone %s skipped: not ready topologically in DAG", m_id)
+                continue
+
+            # 2. Mutex Conflict Check
+            conflict_id = self.check_mutex_conflict(milestone_meta)
+            if conflict_id:
+                logger.info(
+                    "Milestone %s skipped: mutex conflict with running milestone %s",
+                    m_id,
+                    conflict_id,
+                )
+                continue
+
+            # Advance to RUNNING and issue lease
+            with self._running_lock:
+                self._running_milestones[m_id] = milestone_meta
+
+            self._set_stage(m_id, PipelineStage.DISPATCH, {
+                "status": "RUNNING",
+                "dispatched_at": datetime.now(timezone.utc).isoformat(),
+            })
+            try:
+                self.lifecycle.transition(m_id, "RUNNING", {"metadata": milestone_meta})
+            except Exception:
+                pass
+
+            dispatched.append(milestone_meta)
+
+        return dispatched
+
+    # ------------------------------------------------------------------------
+    # Error & Cascading Abort Handler
+    # ------------------------------------------------------------------------
+
+    def on_milestone_failed(self, milestone_id: str, error: Optional[Any] = None) -> List[str]:
+        """
+        Error & Abort Cascading Handler:
+        Invoked when a milestone fails. Signals the DAG scheduler to mark all downstream
+        dependents as PREREQUISITE_ABORTED to prevent downstream workers from attempting
+        tasks with broken dependencies.
+        """
+        logger.error(
+            "Milestone %s failed: %s. Cascading PREREQUISITE_ABORTED to downstream DAG dependents.",
+            milestone_id,
+            str(error),
+            extra={"milestone_id": milestone_id, "error": str(error)},
+        )
+        with self._running_lock:
+            self._running_milestones.pop(milestone_id, None)
+
+        aborted_descendants: List[str] = []
+        if hasattr(self.dag_scheduler, "mark_descendants_prerequisite_aborted"):
+            try:
+                aborted_descendants = self.dag_scheduler.mark_descendants_prerequisite_aborted(
+                    milestone_id,
+                    reason=f"Prerequisite milestone '{milestone_id}' failed: {error}",
+                )
+            except Exception as mark_err:
+                logger.error(
+                    "Failed to mark descendants aborted for %s: %s",
+                    milestone_id,
+                    str(mark_err),
+                    exc_info=True,
+                )
+
+        # Update pipeline state and notify lifecycle for all aborted descendants
+        for desc_id in aborted_descendants:
+            self._set_stage(desc_id, PipelineStage.FAILURE_RECOVERY, {
+                "status": "PREREQUISITE_ABORTED",
+                "upstream_failed_milestone": milestone_id,
+                "error": str(error),
+            })
+            try:
+                self.lifecycle.transition(desc_id, "PREREQUISITE_ABORTED", {
+                    "upstream_failed_milestone": milestone_id,
+                    "reason": str(error),
+                })
+            except Exception:
+                pass
+
+        return aborted_descendants
 
     # ------------------------------------------------------------------------
     # Pipeline Submission & Stage Progression
@@ -969,7 +1317,6 @@ class PipelineCoordinator:
                 )
                 decomposed_results = []
                 for sub_meta in sub_meta_list:
-                    # Recursively submit each child sub-milestone
                     sub_res = self.submit_milestone(sub_meta, initial_stage=PipelineStage.INTAKE)
                     decomposed_results.append(sub_res)
 
@@ -1010,13 +1357,33 @@ class PipelineCoordinator:
         ) as span:
             start_ns = time.perf_counter_ns()
 
-            self.dag_scheduler.insert_milestone(milestone_metadata)
-            self.dag_scheduler.recompute_critical_path()
+            try:
+                self.dag_scheduler.insert_milestone(milestone_metadata)
+                if hasattr(self.dag_scheduler, "recompute_critical_path"):
+                    self.dag_scheduler.recompute_critical_path()
+            except CyclicDependencyException as cyc_err:
+                logger.warning(
+                    "Cyclic dependency detected during DAG insert of %s: %s. Isolating into BLOCKED status.",
+                    milestone_id,
+                    str(cyc_err),
+                    extra={"milestone_id": milestone_id, "cycle_path": getattr(cyc_err, "cycle_path", [])},
+                )
+                self._set_stage(milestone_id, stage, {
+                    "status": "BLOCKED",
+                    "error": str(cyc_err),
+                    "cycle_path": getattr(cyc_err, "cycle_path", []),
+                })
+                try:
+                    self.lifecycle.transition(milestone_id, "BLOCKED", {"reason": str(cyc_err)})
+                except Exception:
+                    pass
+                raise
 
             # Compensation: remove node from DependencyGraph and recompute critical path
             def compensate_dag():
                 self.dag_scheduler.remove_milestone(milestone_id)
-                self.dag_scheduler.recompute_critical_path()
+                if hasattr(self.dag_scheduler, "recompute_critical_path"):
+                    self.dag_scheduler.recompute_critical_path()
 
             tx.record_compensation(stage, compensate_dag)
 
@@ -1093,6 +1460,18 @@ class PipelineCoordinator:
         ) as span:
             start_ns = time.perf_counter_ns()
 
+            # Check mutex conflict before issuing lease
+            conflict_id = self.check_mutex_conflict(milestone_metadata)
+            if conflict_id:
+                logger.warning(
+                    "Milestone %s has potential mutex overlap with active milestone %s",
+                    milestone_id,
+                    conflict_id,
+                )
+
+            with self._running_lock:
+                self._running_milestones[milestone_id] = milestone_metadata
+
             requirements = {
                 "milestone_id": milestone_id,
                 "model_name": cost_estimate.model_name if cost_estimate else "default",
@@ -1107,8 +1486,10 @@ class PipelineCoordinator:
             account_id = str(slot_alloc.get("account_id", "default_account"))
             alloc_id = str(slot_alloc.get("allocation_id", f"alloc_{milestone_id}"))
 
-            # Compensation: release execution slot, return quota allocation
+            # Compensation: release execution slot, return quota allocation, remove from running
             def compensate_dispatch():
+                with self._running_lock:
+                    self._running_milestones.pop(milestone_id, None)
                 self.quota_engine.release_allocation(account_id, alloc_id)
 
             tx.record_compensation(stage, compensate_dispatch)
@@ -1190,7 +1571,6 @@ class PipelineCoordinator:
                     milestone_id, "PREEMPTED", {"reason": preempt_action.reason}
                 )
 
-                # Invoke MilestoneDecomposer with GOVERNOR_PREEMPT trigger
                 sub_meta_list = self.decomposer.decompose(
                     milestone_metadata, trigger=DecomposeTrigger.GOVERNOR_PREEMPT
                 )
@@ -1265,6 +1645,17 @@ class PipelineCoordinator:
                 metadata={"steering_record_id": rec_id, "telemetry": telemetry},
             )
 
+            # Release running lock and update status in DAG
+            with self._running_lock:
+                self._running_milestones.pop(milestone_id, None)
+
+            if hasattr(self.dag_scheduler, "nodes") and milestone_id in self.dag_scheduler.nodes:
+                node_ref = self.dag_scheduler.nodes[milestone_id]
+                if isinstance(node_ref, dict):
+                    node_ref["status"] = "COMPLETED"
+                elif hasattr(node_ref, "status"):
+                    node_ref.status = "COMPLETED"
+
             self.lifecycle.transition(milestone_id, "COMPLETED", {"steering_record_id": rec_id})
 
             duration_ms = (time.perf_counter_ns() - start_ns) / 1_000_000.0
@@ -1303,6 +1694,16 @@ class PipelineCoordinator:
             },
         ) as span:
             start_ns = time.perf_counter_ns()
+
+            # Cascade abort downstream in DAG scheduler
+            self.on_milestone_failed(milestone_id, exception)
+
+            if hasattr(self.dag_scheduler, "nodes") and milestone_id in self.dag_scheduler.nodes:
+                node_ref = self.dag_scheduler.nodes[milestone_id]
+                if isinstance(node_ref, dict):
+                    node_ref["status"] = "FAILED"
+                elif hasattr(node_ref, "status"):
+                    node_ref.status = "FAILED"
 
             rollback_success = False
             try:
@@ -1365,7 +1766,6 @@ class PipelineCoordinator:
 
         results: List[PipelineResult] = []
         for milestone_id, metadata in ready_items:
-            # Re-evaluate deferred milestones starting at COST_ESTIMATION stage
             meta = metadata or {"id": milestone_id}
             if "id" not in meta and "milestone_id" not in meta:
                 meta["id"] = milestone_id
@@ -1429,6 +1829,11 @@ class MockTopologicalScheduler:
 
     def is_ready(self, milestone_id: str) -> bool:
         return True
+
+    def mark_descendants_prerequisite_aborted(
+        self, milestone_id: str, reason: str = "PREREQUISITE_ABORTED"
+    ) -> List[str]:
+        return []
 
 
 class MockExecutionGovernor:
@@ -1532,7 +1937,7 @@ class MockQuotaArbitrageEngine:
 
 
 def main() -> None:
-    """Instantiate pipeline coordinator with mock subsystems and run demonstration."""
+    """Instantiate pipeline coordinator with mock and concrete subsystems and run verification suite."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s",
@@ -1542,6 +1947,7 @@ def main() -> None:
     print("Hermes Orchestrator - PipelineCoordinator Instantiation & Progression Test")
     print("================================================================================")
 
+    # 1. Existing baseline test with mock subsystems
     coordinator = PipelineCoordinator(
         cost_estimator=MockMilestoneCostEstimator(),
         feasibility_gate=MockFeasibilityGate(verdict=GateVerdict.APPROVED),
@@ -1577,7 +1983,92 @@ def main() -> None:
     if state_info:
         print(f"Observed Stage Info  : {state_info.current_stage.value} entered at {state_info.entered_at}")
 
-    print("\n[SUCCESS] PipelineCoordinator verified operational.")
+    assert result.outcome == "COMPLETED"
+    print("\n[SUCCESS] Baseline Mock PipelineCoordinator verified operational.")
+
+    # 2. Protocol Conformance & Concrete DAGScheduler Binding Verification
+    print("\n[*] Verifying DAGScheduler Protocol Conformance & Live Binding...")
+    live_scheduler = DAGScheduler(allow_missing_prereqs=True)
+    assert isinstance(live_scheduler, TopologicalScheduler), (
+        "DAGScheduler failed runtime_checkable TopologicalScheduler protocol validation!"
+    )
+    print("  [+] Concrete DAGScheduler satisfies isinstance(scheduler, TopologicalScheduler).")
+
+    # 3. Default Wiring Verification
+    default_coordinator = PipelineCoordinator()
+    assert isinstance(default_coordinator.dag_scheduler, TopologicalScheduler)
+    print("  [+] PipelineCoordinator successfully instantiated with default live DAGScheduler.")
+
+    # 4. Topological Readiness & Mutex Conflict Checking
+    print("\n[*] Verifying Topological Readiness & Concurrency Safety...")
+    coord_topo = PipelineCoordinator(dag_scheduler=DAGScheduler(allow_missing_prereqs=True))
+    m_root = {
+        "id": "MS-ROOT-1",
+        "title": "Root Foundation",
+        "repo": "hermes_orchestrator",
+        "target_file": "core/engine.py",
+        "prerequisites": [],
+    }
+    m_child = {
+        "id": "MS-CHILD-2",
+        "title": "Downstream Worker",
+        "repo": "hermes_orchestrator",
+        "target_file": "core/worker.py",
+        "prerequisites": ["MS-ROOT-1"],
+    }
+    coord_topo.insert_milestone(m_root)
+    coord_topo.insert_milestone(m_child)
+
+    # Before M_ROOT is COMPLETED, M_CHILD must NOT be ready
+    assert coord_topo.dag_scheduler.is_ready("MS-ROOT-1") is True
+    assert coord_topo.dag_scheduler.is_ready("MS-CHILD-2") is False
+    print("  [+] Topological readiness guard verified: child task blocked on incomplete parent.")
+
+    # Mutex conflict detection check
+    m_conflicting = {
+        "id": "MS-CONFLICT-3",
+        "title": "Conflicting Worker Modification",
+        "repo": "hermes_orchestrator",
+        "target_file": "core/worker.py",
+    }
+    # Simulate child running
+    coord_topo._running_milestones["MS-CHILD-2"] = m_child
+    conflict_found = coord_topo.check_mutex_conflict(m_conflicting)
+    assert conflict_found == "MS-CHILD-2"
+    coord_topo._running_milestones.pop("MS-CHILD-2", None)
+    print("  [+] Mutex conflict detection verified on file contention.")
+
+    # 5. Error & Cascading Abort
+    print("\n[*] Verifying Error & Cascading Abort Invalidation Bridge...")
+    coord_cascade = PipelineCoordinator(dag_scheduler=DAGScheduler(allow_missing_prereqs=True))
+    t1 = {"id": "TASK-1", "name": "Task 1", "repo": "r1", "prerequisites": []}
+    t2 = {"id": "TASK-2", "name": "Task 2", "repo": "r1", "prerequisites": ["TASK-1"]}
+    t3 = {"id": "TASK-3", "name": "Task 3", "repo": "r1", "prerequisites": ["TASK-2"]}
+    coord_cascade.insert_milestone(t1)
+    coord_cascade.insert_milestone(t2)
+    coord_cascade.insert_milestone(t3)
+
+    aborted = coord_cascade.on_milestone_failed("TASK-1", error="Upstream Node Crash")
+    assert "TASK-2" in aborted and "TASK-3" in aborted
+    assert coord_cascade.dag_scheduler.nodes["TASK-2"].status == "PREREQUISITE_ABORTED"
+    assert coord_cascade.dag_scheduler.nodes["TASK-3"].status == "PREREQUISITE_ABORTED"
+    print(f"  [+] Cascading abort marked downstream tasks: {aborted}")
+
+    # 6. Defensive Dynamic Cycle Isolation
+    print("\n[*] Verifying Defensive Dynamic Cycle Isolation...")
+    coord_cycle = PipelineCoordinator(dag_scheduler=DAGScheduler(allow_missing_prereqs=True))
+    node_cyc1 = {"id": "CYC-A", "name": "Cycle Node A", "repo": "r1", "prerequisites": ["CYC-B"]}
+    node_cyc2 = {"id": "CYC-B", "name": "Cycle Node B", "repo": "r1", "prerequisites": ["CYC-A"]}
+    coord_cycle.insert_milestone(node_cyc1)
+    cycle_inserted = coord_cycle.insert_milestone(node_cyc2)
+    assert cycle_inserted is False, "Expected cyclic milestone insertion to be caught and return False"
+    st = coord_cycle.get_pipeline_state("CYC-B")
+    assert st is not None and st.stage_metadata.get("status") == "BLOCKED"
+    print("  [+] Cycle detection defensively caught and isolated CYC-B to BLOCKED without crashing.")
+
+    print("\n================================================================================")
+    print("[SUCCESS] All PipelineCoordinator unit tests & verification gates passed 100%.")
+    print("================================================================================")
 
 
 if __name__ == "__main__":
