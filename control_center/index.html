@@ -1275,6 +1275,66 @@
     </div>
   </div>
 
+  <!-- Modal: Archive Deliverables Explorer -->
+  <div id="modal-archive-explorer" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass border border-slate-800 rounded-2xl max-w-4xl w-full p-6 space-y-4 max-h-[90vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-box-archive text-indigo-400 text-lg"></i>
+          <div>
+            <h3 class="text-base font-bold text-white">Archived Deliverables Explorer</h3>
+            <p class="text-xs text-slate-400">Search, browse, and inspect all historical completed milestones across repositories</p>
+          </div>
+        </div>
+        <button onclick="closeArchiveExplorerModal()" class="text-slate-400 hover:text-white transition"><i class="fa-solid fa-times text-base"></i></button>
+      </div>
+
+      <div class="flex items-center gap-3 flex-wrap flex-shrink-0">
+        <div class="flex-1 min-w-[200px]">
+          <input type="text" id="archive-search-input" oninput="searchArchivedCards()" placeholder="Search archived milestones by title, keyword, or target file..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 outline-none focus:border-indigo-500">
+        </div>
+        <select id="archive-repo-filter" onchange="searchArchivedCards()" class="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500">
+          <option value="all">📁 All Repositories</option>
+        </select>
+      </div>
+
+      <div id="archive-cards-list" class="flex-1 overflow-y-auto space-y-2.5 pr-1 text-xs">
+        <!-- Populated via JS -->
+      </div>
+
+      <div class="flex items-center justify-between border-t border-slate-800 pt-3 flex-shrink-0 text-xs font-mono text-slate-400">
+        <span id="archive-status-count">Showing 0 of 0 archived deliverables</span>
+        <div class="flex items-center gap-2">
+          <button id="btn-archive-prev" onclick="prevArchivePage()" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-40">Previous</button>
+          <button id="btn-archive-next" onclick="nextArchivePage()" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-40">Next 20</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Repository Identity Charter Viewer -->
+  <div id="modal-identity-charter" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4 z-50">
+    <div class="glass border border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-shield-halved text-teal-400 text-lg"></i>
+          <div>
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+              <span id="charter-repo-name">Repository Identity Charter</span>
+              <span class="text-xs text-teal-400 font-mono">(IDENTITY.md)</span>
+            </h3>
+            <p class="text-xs text-slate-400">Living boundaries, core mission, and anti-goals learned from human steering</p>
+          </div>
+        </div>
+        <button onclick="closeIdentityCharterModal()" class="text-slate-400 hover:text-white transition"><i class="fa-solid fa-times text-base"></i></button>
+      </div>
+
+      <div id="charter-content-area" class="flex-1 overflow-y-auto space-y-4 pr-1 text-xs text-slate-200">
+        <!-- Populated via JS -->
+      </div>
+    </div>
+  </div>
+
   <script>
     let globalData = {};
 
@@ -2337,6 +2397,27 @@
 
       const totalArchived = repos.reduce((acc, r) => acc + (r.archived_count || r.total_archived_milestones || 0), 0);
       document.getElementById('count-done').innerText = totalArchived > 0 ? `${cDone} (+${totalArchived} archived)` : cDone;
+
+      // Append interactive Archive Explorer card if there are archived deliverables
+      if (totalArchived > 0) {
+        const archFooter = document.createElement('div');
+        archFooter.className = 'p-3 rounded-xl border border-dashed border-indigo-500/30 bg-indigo-950/20 text-center space-y-2 mt-2';
+        archFooter.innerHTML = `
+          <div class="text-[11px] font-mono text-slate-300 flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-box-archive text-indigo-400"></i>
+            <span><b>${totalArchived}</b> Completed Tasks Archived</span>
+          </div>
+          <div class="flex items-center justify-center gap-2">
+            <button onclick="loadMoreArchivedCards(10)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-xs font-semibold transition flex items-center gap-1">
+              <i class="fa-solid fa-plus text-[10px]"></i> Load 10 More
+            </button>
+            <button onclick="openArchiveExplorerModal()" class="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition flex items-center gap-1 shadow-sm shadow-indigo-600/30">
+              <i class="fa-solid fa-magnifying-glass text-[10px]"></i> Explore All
+            </button>
+          </div>
+        `;
+        colDone.appendChild(archFooter);
+      }
     }
 
     function renderRepos() {
@@ -2409,8 +2490,11 @@
               </button>
             </div>
 
-            <div class="text-[11px] font-mono text-slate-300 bg-slate-950/80 border border-slate-800/90 rounded-lg p-2.5 truncate" title="${r.path}">
-              <i class="fa-regular fa-folder text-indigo-400 mr-1.5"></i> ${r.path}
+            <div class="flex items-center justify-between gap-2 text-[11px] font-mono text-slate-300 bg-slate-950/80 border border-slate-800/90 rounded-lg p-2.5">
+              <span class="truncate" title="${r.path}"><i class="fa-regular fa-folder text-indigo-400 mr-1.5"></i> ${r.path}</span>
+              <button onclick="openIdentityCharterModal('${r.id}')" class="px-2 py-0.5 rounded bg-teal-950/70 hover:bg-teal-900/80 text-teal-300 border border-teal-500/30 text-[10px] font-semibold flex items-center gap-1 transition flex-shrink-0" title="View Living Identity Charter (Scope & Anti-Goals)">
+                <i class="fa-solid fa-shield-halved text-teal-400"></i> Identity Charter
+              </button>
             </div>
 
             <div class="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-slate-950/40 rounded-xl border border-slate-800/50">
@@ -3919,6 +4003,173 @@
 
     function closeSteeringHistoryModal() {
       document.getElementById('modal-steering-memory').classList.add('hidden');
+    }
+
+    // Archive Deliverables Explorer Logic
+    let currentArchiveOffset = 0;
+    const ARCHIVE_PAGE_LIMIT = 20;
+
+    async function loadMoreArchivedCards(count = 10) {
+      try {
+        const repoFilter = document.getElementById('repo-filter')?.value || 'all';
+        const resp = await fetch(`/api/archive?repo=${repoFilter}&offset=0&limit=${count}`);
+        const data = await resp.json();
+        const colDone = document.getElementById('col-done');
+        if (!colDone || !data.milestones || data.milestones.length === 0) {
+          showToast('No more archived milestones found.');
+          return;
+        }
+
+        data.milestones.forEach(m => {
+          const card = document.createElement('div');
+          card.className = "card-kanban p-3 rounded-xl border border-dashed border-slate-700 bg-slate-900/70 text-xs space-y-1.5 opacity-90 hover:opacity-100 transition";
+          card.innerHTML = `
+            <div class="flex items-center justify-between gap-1 text-[10px] text-slate-400 font-mono">
+              <span class="px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-semibold">[Archived] ${m.repo_id}</span>
+              <span class="text-emerald-400"><i class="fa-solid fa-circle-check"></i> Done</span>
+            </div>
+            <p class="font-bold text-slate-200 text-xs">${m.name}</p>
+            <p class="text-slate-400 text-[11px] line-clamp-1">${m.details || ''}</p>
+            <div class="text-[10px] font-mono text-slate-500 truncate"><i class="fa-regular fa-file-code mr-1"></i>${m.relative_filepath || ''}</div>
+          `;
+          colDone.insertBefore(card, colDone.lastElementChild);
+        });
+        showToast(`Loaded ${data.milestones.length} archived deliverables into Done column.`);
+      } catch (e) {
+        alert('Failed to load archived deliverables: ' + e.message);
+      }
+    }
+
+    function openArchiveExplorerModal() {
+      document.getElementById('modal-archive-explorer').classList.remove('hidden');
+      currentArchiveOffset = 0;
+
+      // Populate repo filter in archive modal
+      const sel = document.getElementById('archive-repo-filter');
+      if (sel && globalData.repositories) {
+        sel.innerHTML = '<option value="all">📁 All Repositories</option>' +
+          globalData.repositories.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+      }
+      searchArchivedCards();
+    }
+
+    function closeArchiveExplorerModal() {
+      document.getElementById('modal-archive-explorer').classList.add('hidden');
+    }
+
+    async function searchArchivedCards() {
+      const q = document.getElementById('archive-search-input')?.value.trim() || '';
+      const repo = document.getElementById('archive-repo-filter')?.value || 'all';
+      const container = document.getElementById('archive-cards-list');
+      const countLabel = document.getElementById('archive-status-count');
+      const prevBtn = document.getElementById('btn-archive-prev');
+      const nextBtn = document.getElementById('btn-archive-next');
+
+      if (container) container.innerHTML = '<div class="p-6 text-center text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> Fetching archive deliverables...</div>';
+
+      try {
+        const resp = await fetch(`/api/archive?repo=${encodeURIComponent(repo)}&offset=${currentArchiveOffset}&limit=${ARCHIVE_PAGE_LIMIT}&search=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+
+        if (!data.milestones || data.milestones.length === 0) {
+          container.innerHTML = '<div class="p-8 text-center text-slate-500 font-mono">No matching archived deliverables found.</div>';
+          if (countLabel) countLabel.innerText = `Showing 0 of ${data.total || 0} archived deliverables`;
+          if (prevBtn) prevBtn.disabled = (currentArchiveOffset === 0);
+          if (nextBtn) nextBtn.disabled = true;
+          return;
+        }
+
+        if (countLabel) countLabel.innerText = `Showing ${currentArchiveOffset + 1} - ${currentArchiveOffset + data.milestones.length} of ${data.total} deliverables`;
+        if (prevBtn) prevBtn.disabled = (currentArchiveOffset === 0);
+        if (nextBtn) nextBtn.disabled = !data.has_more;
+
+        container.innerHTML = data.milestones.map(m => `
+          <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5 hover:border-indigo-500/40 transition">
+            <div class="flex items-center justify-between text-[10px] font-mono">
+              <div class="flex items-center gap-1.5">
+                <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold uppercase">${m.repo_id}</span>
+                <span class="text-slate-500">${m.completed_at || m.added_at || ''}</span>
+              </div>
+              ${m.artifacts?.commit_hash ? `<span class="text-emerald-400 flex items-center gap-1"><i class="fa-solid fa-code-commit"></i> ${m.artifacts.commit_hash}</span>` : ''}
+            </div>
+            <div class="font-bold text-slate-100 text-xs">${m.name}</div>
+            <div class="text-[11px] text-slate-400 leading-relaxed">${m.details || 'No detailed specifications.'}</div>
+            ${m.relative_filepath ? `<div class="text-[10px] font-mono text-slate-500"><i class="fa-regular fa-file-code mr-1"></i>${m.relative_filepath}</div>` : ''}
+          </div>
+        `).join('');
+      } catch (e) {
+        if (container) container.innerHTML = `<div class="p-4 text-rose-400">Error: ${e.message}</div>`;
+      }
+    }
+
+    function prevArchivePage() {
+      if (currentArchiveOffset >= ARCHIVE_PAGE_LIMIT) {
+        currentArchiveOffset -= ARCHIVE_PAGE_LIMIT;
+        searchArchivedCards();
+      }
+    }
+
+    function nextArchivePage() {
+      currentArchiveOffset += ARCHIVE_PAGE_LIMIT;
+      searchArchivedCards();
+    }
+
+    // Repository Identity Charter Modal Logic
+    async function openIdentityCharterModal(repoId) {
+      document.getElementById('modal-identity-charter').classList.remove('hidden');
+      const container = document.getElementById('charter-content-area');
+      const nameHeader = document.getElementById('charter-repo-name');
+      if (container) container.innerHTML = '<div class="p-6 text-center text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> Loading identity charter...</div>';
+
+      try {
+        const resp = await fetch(`/api/identity?repo=${encodeURIComponent(repoId)}`);
+        const data = await resp.json();
+        const charter = data.charter || {};
+
+        if (nameHeader) nameHeader.innerText = charter.title || repoId;
+
+        container.innerHTML = `
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+            <h4 class="text-xs font-bold text-teal-300 uppercase tracking-wider flex items-center gap-1.5">
+              <i class="fa-solid fa-bullseye text-teal-400"></i> Core Mission & Purpose
+            </h4>
+            <p class="text-xs text-slate-200 leading-relaxed">${charter.mission || 'Autonomous engineering development.'}</p>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-2">
+            <h4 class="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+              <i class="fa-solid fa-circle-check text-emerald-400"></i> What This Repo IS Designed For (In-Scope)
+            </h4>
+            <ul class="list-disc pl-5 space-y-1 text-slate-300 text-xs">
+              ${(charter.in_scope || []).map(item => `<li><b>${item}</b></li>`).join('')}
+            </ul>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/30 space-y-2">
+            <h4 class="text-xs font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1.5">
+              <i class="fa-solid fa-ban text-rose-400"></i> What This Repo IS NOT Designed For (Anti-Goals)
+            </h4>
+            <ul class="list-disc pl-5 space-y-1 text-rose-200/90 text-xs">
+              ${(charter.out_of_scope || []).map(item => `<li>${item}</li>`).join('')}
+            </ul>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+            <h4 class="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+              <i class="fa-solid fa-timeline text-indigo-400"></i> Living Evolution History (Learned from Human Actions)
+            </h4>
+            <div class="space-y-1 text-[11px] font-mono text-slate-400">
+              ${(charter.history || []).map(h => `<div>${h}</div>`).join('')}
+            </div>
+          </div>
+        `;
+      } catch (e) {
+        if (container) container.innerHTML = `<div class="p-4 text-rose-400">Error: ${e.message}</div>`;
+      }
+    }
+
+    function closeIdentityCharterModal() {
+      document.getElementById('modal-identity-charter').classList.add('hidden');
     }
 
     // Initialize and gentle auto-poll every 3s

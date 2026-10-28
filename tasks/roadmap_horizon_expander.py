@@ -155,6 +155,25 @@ def propose_repository_horizon(repo_path: Path, repo_id: str, repo_name: str) ->
     phase_num = len(re.findall(r'##\s+Phase\s+(\d+)', current_text, re.IGNORECASE)) + 1
     selected_idea = sota_ideas[(phase_num - 1) % len(sota_ideas)]
 
+    # Validate against Repository Identity Charter (Anti-Goals Guard)
+    try:
+        try:
+            from tasks.repository_identity_manager import get_repository_identity, validate_proposal_against_identity
+        except ImportError:
+            from repository_identity_manager import get_repository_identity, validate_proposal_against_identity  # type: ignore
+        charter = get_repository_identity(repo_path, repo_id, repo_name)
+        valid, reason = validate_proposal_against_identity(charter, selected_idea["feature"], selected_idea["product_visual"])
+        if not valid:
+            print(f"[!] [CHARTER GUARD] Horizon candidate '{selected_idea['feature']}' rejected: {reason}")
+            # select alternative conforming idea
+            for alt_idea in sota_ideas:
+                v, _ = validate_proposal_against_identity(charter, alt_idea["feature"], alt_idea["product_visual"])
+                if v:
+                    selected_idea = alt_idea
+                    break
+    except Exception as ce:
+        print(f"[-] Identity validation notice: {ce}")
+
     proposal = {
         "repo_id": repo_id,
         "repo_name": repo_name,

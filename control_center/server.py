@@ -116,8 +116,89 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             self.handle_get_cadence()
         elif parsed.path == "/api/horizon/pending":
             self.handle_get_horizon_proposals()
+        elif parsed.path == "/api/archive":
+            self.handle_get_archive(parsed)
+        elif parsed.path == "/api/identity":
+            self.handle_get_identity(parsed)
         else:
             super().do_GET()
+
+    def handle_get_archive(self, parsed):
+        from urllib.parse import parse_qs
+        qs = parse_qs(parsed.query)
+        repo_id = qs.get("repo", ["all"])[0]
+        offset = int(qs.get("offset", [0])[0])
+        limit = int(qs.get("limit", [20])[0])
+        search = qs.get("search", [""])[0].lower().strip()
+
+        archive_file = DASH_DIR / "repositories_archive.json"
+        res = {"total": 0, "milestones": []}
+        if archive_file.exists():
+            try:
+                with open(archive_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                arch_repos = data.get("repositories", {})
+                all_ms = []
+                for rid, ms_list in arch_repos.items():
+                    if repo_id != "all" and rid != repo_id:
+                        continue
+                    for m in ms_list:
+                        m_copy = dict(m)
+                        m_copy["repo_id"] = rid
+                        all_ms.append(m_copy)
+
+                if search:
+                    all_ms = [m for m in all_ms if search in m.get("name", "").lower() or search in m.get("details", "").lower()]
+
+                res["total"] = len(all_ms)
+                res["milestones"] = all_ms[offset:offset + limit]
+                res["has_more"] = (offset + limit) < len(all_ms)
+            except Exception as e:
+                res["error"] = str(e)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
+
+    def handle_get_identity(self, parsed):
+        from urllib.parse import parse_qs
+        qs = parse_qs(parsed.query)
+        repo_id = qs.get("repo", ["hermes_orchestrator"])[0]
+        try:
+            try:
+                from tasks.repository_identity_manager import get_repository_identity
+            except ImportError:
+                from repository_identity_manager import get_repository_identity  # type: ignore
+
+            repos_file = DASH_DIR / "repositories.json"
+            repo_path = None
+            repo_name = repo_id
+            if repos_file.exists():
+                try:
+                    with open(repos_file, "r", encoding="utf-8") as f:
+                        rdata = json.load(f)
+                    for r in rdata.get("repositories", []):
+                        if r.get("id") == repo_id:
+                            repo_path = Path(r.get("path", ""))
+                            repo_name = r.get("name", repo_id)
+                            break
+                except Exception:
+                    pass
+            if not repo_path or not repo_path.exists():
+                repo_path = BASE_DIR
+
+            charter = get_repository_identity(repo_path, repo_id, repo_name)
+            data = {"status": "ok", "repo_id": repo_id, "charter": charter}
+        except Exception as e:
+            data = {"status": "error", "error": str(e)}
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def handle_get_horizon_proposals(self):
         try:
@@ -1089,6 +1170,12 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                 for r in rdata.get("repositories", []):
                     if r.get("id") == repo_id or r.get("name") == repo_id:
                         r["milestone_cap"] = limit
+                        # Dynamically evolve IDENTITY.md from human steering intent!
+                        try:
+                            from tasks.repository_identity_manager import update_identity_from_human_action
+                            update_identity_from_human_action(Path(r.get("path", BASE_DIR)), repo_id, "Human Steering Directive", intent)
+                        except Exception:
+                            pass
                         break
                 with open(repos_file, "w", encoding="utf-8") as f:
                     json.dump(rdata, f, indent=2, ensure_ascii=False)
@@ -1189,6 +1276,14 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                             }
                             new_item["skills"] = infer_task_skills(new_item, repo_id, r.get("category", ""))
                             r.setdefault("milestones", []).append(new_item)
+                            
+                            # Dynamically evolve the repository's IDENTITY.md from human milestone input!
+                            try:
+                                from tasks.repository_identity_manager import update_identity_from_human_action
+                                update_identity_from_human_action(Path(r.get("path", BASE_DIR)), repo_id, "Human Milestone Added", f"{name}: {details}")
+                            except Exception:
+                                pass
+
                     with open(repos_file, "w") as f:
                         json.dump(rdata, f, indent=2, ensure_ascii=False)
                 except Exception:
