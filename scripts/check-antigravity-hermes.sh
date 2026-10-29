@@ -273,7 +273,7 @@ if [[ "$TEST_INFERENCE" -eq 1 ]]; then
     fi
 fi
 
-# 9. Synchronize Hermes configuration and credentials
+# 9. Synchronize Hermes configuration, discovered models, and credentials
 HERMES_RESTART_NEEDED=0
 
 if [[ -f "$HERMES_CONFIG" ]]; then
@@ -282,6 +282,43 @@ if [[ -f "$HERMES_CONFIG" ]]; then
         echo "[WATCHDOG] Syncing Hermes config.yaml base_url -> ${ROUTER_BASE_URL}..."
         sed -i -E "s|base_url: http://[0-9.]+:[0-9]+/v1|base_url: ${ROUTER_BASE_URL}|g" "$HERMES_CONFIG"
         HERMES_RESTART_NEEDED=1
+    fi
+
+    # Automatically synchronize active model IDs from Antigravity Tools into Hermes config.yaml
+    if [[ -f "$TMP_RESP" && -s "$TMP_RESP" ]]; then
+        python3 -c "
+import json, yaml, os
+
+cfg_path = '$HERMES_CONFIG'
+models_path = '$TMP_RESP'
+try:
+    with open(models_path, 'r', encoding='utf-8') as f:
+        mdata = json.load(f)
+    active_model_ids = [m['id'] for m in mdata.get('data', []) if isinstance(m, dict) and 'id' in m]
+    
+    if active_model_ids and os.path.exists(cfg_path):
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            ycfg = yaml.safe_load(f) or {}
+            
+        providers = ycfg.setdefault('providers', {})
+        ag_provider = providers.setdefault('antigravity_tools', {})
+        ag_provider['base_url'] = '$ROUTER_BASE_URL'
+        ag_provider['discover_models'] = True
+        
+        models_dict = ag_provider.setdefault('models', {})
+        updated = False
+        for mid in active_model_ids:
+            if mid not in models_dict:
+                models_dict[mid] = {}
+                updated = True
+                
+        if updated:
+            with open(cfg_path, 'w', encoding='utf-8') as f:
+                yaml.dump(ycfg, f, default_flow_style=False, sort_keys=False)
+            print(f'[WATCHDOG] Injected {len(active_model_ids)} Antigravity Tools models into Hermes config.yaml')
+except Exception as e:
+    print('[WATCHDOG] Note on model sync:', e)
+" 2>/dev/null || true
     fi
 fi
 
