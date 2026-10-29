@@ -687,6 +687,51 @@ def get_repo_git_state(repo_path: Path) -> dict:
         "clean": len(status) == 0
     }
 
+def extract_uncompleted_roadmap_milestones(roadmap_text: str, existing_milestones: list) -> list:
+    """
+    Parses unchecked checkboxes (- [ ]) from ROADMAP.md and maps them directly into
+    executable milestone dictionaries, ensuring zero-token deterministic planning.
+    """
+    if not roadmap_text or "- [ ]" not in roadmap_text:
+        return []
+        
+    pattern = re.compile(r"-\s*\[ \]\s*\*\*Milestone\s*([0-9.]+):\s*(.*?)\*\*(.*?)(?=\n-\s*\[|\n##|\Z)", re.DOTALL)
+    existing_targets = {m.get("relative_filepath", "").strip() for m in existing_milestones if m.get("relative_filepath")}
+    existing_names = {m.get("name", "").strip().lower() for m in existing_milestones if m.get("name")}
+    
+    extracted = []
+    for m in pattern.finditer(roadmap_text):
+        code = m.group(1).strip()
+        title = m.group(2).strip()
+        body = m.group(3).strip()
+        
+        artifact_m = re.search(r"\*\*Artifact:\*\*\s*`([^`]+)`", body)
+        artifact = artifact_m.group(1).strip() if artifact_m else ""
+        
+        cap_m = re.search(r"\*\*Capabilities:\*\*\s*(.*?)(?=\n-|\Z)", body, re.DOTALL)
+        details = cap_m.group(1).strip().replace("\n", " ") if cap_m else title
+        
+        full_name = f"Milestone {code}: {title}"
+        if (artifact and artifact in existing_targets) or full_name.lower() in existing_names or title.lower() in existing_names:
+            continue
+            
+        extracted.append({
+            "name": full_name,
+            "status": "ready",
+            "details": details,
+            "relative_filepath": artifact,
+            "technical_specification": f"Implement {title} strictly matching specifications in ROADMAP.md Phase {code}. Target: {artifact}.",
+            "executor_prompt": f"You are the Lead Engineer. Implement {title} in '{artifact}'. Specifications: {details}. Ensure zero mocks and 100% clean test passes.",
+            "is_ai_development": True,
+            "approved_for_auto_run": True,
+            "github_column": "Ready",
+            "planned_by": "Roadmap First Engine",
+            "planner_color": "cyan",
+            "added_by": f"ROADMAP.md Milestone {code}",
+            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+        })
+    return extracted
+
 def resolve_authoritative_goal_document(repo_path: Path, repo_entry: dict) -> Tuple[str, str]:
     """
     Resolves the authoritative roadmap/goal document for a repository.
@@ -812,6 +857,22 @@ def run_planner_pass(repos: list) -> bool:
             try:
                 git_state = get_repo_git_state(repo_path)
                 goal_filename, goal_doc = resolve_authoritative_goal_document(repo_path, repo)
+
+                # -------------------------------------------------------------
+                # 🎯 ROADMAP-FIRST DETERMINISTIC MILESTONE DISPATCH:
+                # If the authoritative ROADMAP.md contains uncompleted checkboxes (- [ ]),
+                # DISPATCH THEM FIRST before calling any LLM to invent new tasks!
+                # -------------------------------------------------------------
+                uncompleted_roadmap_items = extract_uncompleted_roadmap_milestones(goal_doc, milestones)
+                if uncompleted_roadmap_items:
+                    items_to_enqueue = uncompleted_roadmap_items[:missing]
+                    print(f"[*] 🎯 [ROADMAP-FIRST] Found {len(uncompleted_roadmap_items)} uncompleted roadmap milestone(s) in '{repo_name}' ({goal_filename}). Ingesting {len(items_to_enqueue)} item(s) directly into pipeline!")
+                    with repos_lock:
+                        for item in items_to_enqueue:
+                            milestones.append(item)
+                        save_repositories(repos)
+                    notify(f"🎯 *Roadmap-First Milestone Enqueued*\\n• Repo: *{repo_name}*\\n• Ingested: *{len(items_to_enqueue)}* milestone(s) directly from `{goal_filename}`.", force=True)
+                    return True
 
                 # Proactive Horizon Expansion & Human Approval Gate:
                 # If existing roadmap goals are completed or exhausted, formulate an AI Horizon Proposal.
