@@ -522,10 +522,20 @@ YAML_EOF
     local HERMES_ENV="${HERMES_DIR}/.env"
     if [[ ! -f "$HERMES_ENV" ]]; then
         cat << 'ENV_EOF' > "$HERMES_ENV"
-HERMES_ANTIGRAVITY_TOOLS_API_KEY=sk-antigravity-fleet-node
+HERMES_ANTIGRAVITY_TOOLS_API_KEY=sk-ant...node
 ROUTER_URL=http://127.0.0.1:8045/v1
 ENV_EOF
         log_ok "Created ~/.hermes/.env"
+    fi
+
+    # 4. Deploy and verify watchdog guardian script ~/.local/bin/check-antigravity-hermes.sh
+    log_info "Ensuring Antigravity Tools & Hermes connection watchdog is installed..."
+    local WATCHDOG_SRC="${AUTO_DIR}/scripts/check-antigravity-hermes.sh"
+    local WATCHDOG_DEST="${USER_HOME}/.local/bin/check-antigravity-hermes.sh"
+    if [[ -f "$WATCHDOG_SRC" ]]; then
+        cp -f "$WATCHDOG_SRC" "$WATCHDOG_DEST"
+        chmod +x "$WATCHDOG_DEST"
+        log_ok "Synchronized ~/.local/bin/check-antigravity-hermes.sh"
     fi
 }
 
