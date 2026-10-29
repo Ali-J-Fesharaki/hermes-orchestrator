@@ -867,10 +867,9 @@ def run_planner_pass(repos: list) -> bool:
                 if uncompleted_roadmap_items:
                     items_to_enqueue = uncompleted_roadmap_items[:missing]
                     print(f"[*] 🎯 [ROADMAP-FIRST] Found {len(uncompleted_roadmap_items)} uncompleted roadmap milestone(s) in '{repo_name}' ({goal_filename}). Ingesting {len(items_to_enqueue)} item(s) directly into pipeline!")
-                    with repos_lock:
-                        for item in items_to_enqueue:
-                            milestones.append(item)
-                        save_repositories(repos)
+                    for item in items_to_enqueue:
+                        milestones.append(item)
+                    save_repositories(repos)
                     notify(f"🎯 *Roadmap-First Milestone Enqueued*\\n• Repo: *{repo_name}*\\n• Ingested: *{len(items_to_enqueue)}* milestone(s) directly from `{goal_filename}`.", force=True)
                     return True
 
